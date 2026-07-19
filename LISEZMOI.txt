@@ -1,0 +1,28 @@
+UKE STUDIO — INSTALLATION SUR TON TÉLÉPHONE
+============================================
+
+ÉTAPE 1 — Mettre l'appli en ligne (2 minutes, gratuit)
+  1. Sur ton ORDINATEUR, va sur  https://app.netlify.com/drop
+  2. Glisse-dépose le DOSSIER "uke-studio-pwa" entier sur la page
+  3. Netlify te donne une adresse en https://….netlify.app  → c'est ton appli en ligne
+  (Alternative : dépose les 4 fichiers sur ton propre hébergement, ex. un sous-dossier de dt-tp76.fr — il faut du HTTPS)
+
+ÉTAPE 2 — Installer sur le téléphone
+  1. Ouvre l'adresse dans CHROME sur ton téléphone
+  2. Menu ⋮  →  « Ajouter à l'écran d'accueil »  →  Installer
+  3. L'icône Uke Studio apparaît comme une vraie appli, plein écran
+
+ÉTAPE 3 — Activer le micro
+  1. Ouvre l'appli → Accordeur → « 🎤 Écouter mon ukulélé »
+  2. Autorise le micro quand le téléphone le demande
+  3. Joue une corde à vide, fort, près du téléphone → la note s'affiche
+  (Le micro exige le HTTPS : c'est le cas avec Netlify.)
+
+À SAVOIR
+  - Tes imports, favoris, thème et niveau mémoire sont sauvegardés SUR le téléphone.
+  - Le bouton « Chercher le rythme uku » ne fonctionne que dans Claude (il utilise
+    l'IA intégrée) — fais tes recherches de rythme ici avant, elles sont sauvegardées
+    dans le morceau... mais uniquement dans la version Claude. Sur le téléphone,
+    règle le rythme via les styles par défaut.
+  - Pour mettre à jour l'appli après nos prochaines améliorations : je régénère le
+    dossier, tu re-déposes sur Netlify (même adresse possible avec un compte gratuit).

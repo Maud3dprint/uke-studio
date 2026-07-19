@@ -1,0 +1,10 @@
+{
+  "name": "Uke Studio",
+  "short_name": "Uke Studio",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0e1220",
+  "theme_color": "#0e1220",
+  "lang": "fr",
+  "icons": [{ "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }]
+}
