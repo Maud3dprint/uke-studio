@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#161a24">
+<title>Uke Studio</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-512.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script>
+if ("serviceWorker" in navigator) { window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); }); }
+</script>
+<script>
+(function () {
+  function show(msg) {
+    try {
+      var d = document.getElementById("uke-error-banner");
+      if (!d) {
+        d = document.createElement("div");
+        d.id = "uke-error-banner";
+        d.style.cssText = "position:fixed;top:0;left:0;right:0;background:#b3261e;color:#fff;padding:10px 12px;font:12px/1.5 monospace;z-index:2147483647;white-space:pre-wrap;max-height:45vh;overflow:auto";
+        document.body.appendChild(d);
+      }
+      d.textContent += (d.textContent ? "\n" : "") + "⚠️ " + msg + "\n(montre cette capture à ChatGPT)";
+    } catch (e) {}
+  }
+  window.addEventListener("error", function (e) {
+    show("Erreur : " + (e.message || e.error) + (e.filename ? "\n" + e.filename.split("/").pop() + " : ligne " + e.lineno + ":" + e.colno : ""));
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    var r = e.reason || {};
+    show("Promesse rejetée : " + (r.message || String(r)) + (r.stack ? "\n" + String(r.stack).split("\n").slice(0, 3).join("\n") : ""));
+  });
+})();
+if (!window.storage) {
+  window.storage = {
+    get: async (k) => { const v = localStorage.getItem(k); return v === null ? null : { key: k, value: v }; },
+    set: async (k, v) => { localStorage.setItem(k, v); return { key: k, value: v }; },
+    delete: async (k) => { localStorage.removeItem(k); return { key: k, deleted: true }; },
+  };
+}
+</script>
+<style>html,body{margin:0;padding:0;background:#161a24}#root{min-height:100vh}</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="vendor-react.js"></script>
+<script src="data-chords.js"></script>
+<script src="data-songs.js"></script>
+<script src="app/bootstrap.js"></script>
+<script src="app/theme.js"></script>
+<script src="app/db.js"></script>
+<script src="app/engines-align.js"></script>
+<script src="app/engines-audio.js"></script>
+<script src="app/engines-import.js"></script>
+<script src="app/screens/library.js"></script>
+<script src="app/screens/player.js"></script>
+<script src="app/screens/import-mp3.js"></script>
+<script src="app/screens/karaoke.js"></script>
+<script src="app/screens/home.js"></script>
+<script src="app/screens/transfer.js"></script>
+<script src="app/screens/studio-patreon.js"></script>
+<script src="app/screens/recordings.js"></script>
+<script src="app/screens/import-voice.js"></script>
+<script src="app/screens/import-image-pdf.js"></script>
+<script src="app/screens/strumming.js"></script>
+<script src="app/screens/request-song.js"></script>
+<script src="app/screens/tuner.js"></script>
+<script src="app/screens/editor.js"></script>
+<script src="app/screens/chord-diagram.js"></script>
+<script src="app/main.js"></script>
+</body>
+</html>
