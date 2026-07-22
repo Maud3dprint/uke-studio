@@ -23,7 +23,7 @@ if ("serviceWorker" in navigator) { window.addEventListener("load", () => { navi
         d.style.cssText = "position:fixed;top:0;left:0;right:0;background:#b3261e;color:#fff;padding:10px 12px;font:12px/1.5 monospace;z-index:2147483647;white-space:pre-wrap;max-height:45vh;overflow:auto";
         document.body.appendChild(d);
       }
-      d.textContent += (d.textContent ? "\n" : "") + "⚠️ " + msg + "\n(montre cette capture à Claude)";
+      d.textContent += (d.textContent ? "\n" : "") + "⚠️ " + msg + "\n(montre cette capture à ChatGPT)";
     } catch (e) {}
   }
   window.addEventListener("error", function (e) {
@@ -47,6 +47,29 @@ if (!window.storage) {
 <body>
 <div id="root"></div>
 <script src="vendor-react.js"></script>
-<script src="app-bundle.js"></script>
+<script src="data-chords.js"></script>
+<script src="data-songs.js"></script>
+<script src="app/bootstrap.js"></script>
+<script src="app/theme.js"></script>
+<script src="app/db.js"></script>
+<script src="app/engines-align.js"></script>
+<script src="app/engines-audio.js"></script>
+<script src="app/engines-import.js"></script>
+<script src="app/screens/library.js"></script>
+<script src="app/screens/player.js"></script>
+<script src="app/screens/import-mp3.js"></script>
+<script src="app/screens/karaoke.js"></script>
+<script src="app/screens/home.js"></script>
+<script src="app/screens/transfer.js"></script>
+<script src="app/screens/studio-patreon.js"></script>
+<script src="app/screens/recordings.js"></script>
+<script src="app/screens/import-voice.js"></script>
+<script src="app/screens/import-image-pdf.js"></script>
+<script src="app/screens/strumming.js"></script>
+<script src="app/screens/request-song.js"></script>
+<script src="app/screens/tuner.js"></script>
+<script src="app/screens/editor.js"></script>
+<script src="app/screens/chord-diagram.js"></script>
+<script src="app/main.js"></script>
 </body>
 </html>
