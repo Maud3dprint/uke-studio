@@ -615,35 +615,63 @@ function arrParseMidiMelodyExact(buf){
 }
 function arrAssignPhrasePositions(src,lowG){
   var OPEN=lowG?[55,60,64,69]:[67,60,64,69]; /* indices internes G,C,E,A */
-  var order=[3,2,1,0],out=[],prev=null;
-  var mids=src.map(function(n){return n.midi;});
-  var lo=mids.length?Math.min.apply(null,mids):60,hi=mids.length?Math.max.apply(null,mids):72,span=Math.max(1,hi-lo);
-  src.forEach(function(n,idx){
-    var candidates=[],targetF=2+((n.midi-lo)/span)*8; /* la phrase peut vivre entre env. cases 2 et 10 */
-    for(var si=0;si<4;si++){
-      for(var oct=-24;oct<=24;oct+=12){
-        var m=n.midi+oct,f=m-OPEN[si];
-        if(f>=0&&f<=15){
-          var cost=Math.abs(oct)*0.48+Math.abs(f-targetF)*0.16;
-          if(f===0)cost+=0.55;                 /* évite une suite presque uniquement à vide */
-          if(f<=3)cost+=0.18;                  /* sans interdire les premières cases */
-          candidates.push({s:order[si],f:f,midi:m,cost:cost});
-        }
-      }
-    }
-    if(!candidates.length){var sf=pkAssign(n.midi,lowG),STR=["A","E","C","G"];candidates=[{s:STR.indexOf(sf.s),f:Math.max(0,Math.min(15,sf.f)),midi:n.midi,cost:20}];}
-    candidates.forEach(function(c){
-      if(prev){
-        c.cost+=Math.abs(c.f-prev.f)*0.72+Math.abs(c.s-prev.s)*0.38;
-        if(Math.abs(c.f-prev.f)>5)c.cost+=2.2;
-        var contour=n.midi-(src[idx-1]?src[idx-1].midi:n.midi),placed=c.midi-prev.midi;
-        if(contour&&placed&&Math.sign(contour)!==Math.sign(placed))c.cost+=1.5;
-      }
+  var order=[3,2,1,0];
+  if(!src.length)return [];
+
+  /* Une seule transposition d'octave pour TOUTE la mélodie.
+     On interdit désormais de changer d'octave note par note, ce qui déformait l'air. */
+  var octaveChoices=[-24,-12,0,12,24],bestShift=0,bestCoverage=-1,bestCenter=1e9;
+  octaveChoices.forEach(function(sh){
+    var covered=0,frets=[];
+    src.forEach(function(n){
+      var m=n.midi+sh,ok=false,minF=99;
+      for(var si=0;si<4;si++){var f=m-OPEN[si];if(f>=0&&f<=15){ok=true;minF=Math.min(minF,f);}}
+      if(ok){covered++;frets.push(minF);}
     });
-    candidates.sort(function(a,b){return a.cost-b.cost;});var best=candidates[0];
-    out.push({s:best.s,f:best.f,b:n.b,d:n.d,midi:n.midi});prev=best;
+    var avg=frets.length?frets.reduce(function(a,b){return a+b;},0)/frets.length:99;
+    var center=Math.abs(avg-6);
+    if(covered>bestCoverage||(covered===bestCoverage&&center<bestCenter)){bestCoverage=covered;bestCenter=center;bestShift=sh;}
   });
-  return out;
+
+  /* Programmation dynamique : choisit les positions de toute la phrase ensemble,
+     sans modifier la hauteur relative des notes. */
+  var layers=[];
+  src.forEach(function(n,idx){
+    var m=n.midi+bestShift,cands=[];
+    for(var si=0;si<4;si++){
+      var f=m-OPEN[si];
+      if(f>=0&&f<=15)cands.push({s:order[si],f:f,midi:m,cost:(f===0?0.18:0)+(f>12?0.18:0)});
+    }
+    /* Si une note dépasse réellement le manche, on la rapproche d'une octave,
+       uniquement pour cette note impossible et avec une forte pénalité visible. */
+    if(!cands.length){
+      [-12,12,-24,24].some(function(extra){
+        var mm=m+extra,tmp=[];
+        for(var sj=0;sj<4;sj++){var ff=mm-OPEN[sj];if(ff>=0&&ff<=15)tmp.push({s:order[sj],f:ff,midi:mm,cost:8+Math.abs(extra)/12*2});}
+        if(tmp.length){cands=tmp;return true;}return false;
+      });
+    }
+    if(!cands.length){var sf=pkAssign(m,lowG),STR=["A","E","C","G"];cands=[{s:STR.indexOf(sf.s),f:Math.max(0,Math.min(15,sf.f)),midi:m,cost:20}];}
+    layers.push(cands);
+  });
+
+  var dp=[],back=[];
+  layers.forEach(function(layer,i){dp[i]=[];back[i]=[];layer.forEach(function(c,j){
+    if(i===0){dp[i][j]=c.cost+Math.abs(c.f-5)*0.05;back[i][j]=-1;return;}
+    var best=1e99,bi=-1;
+    layers[i-1].forEach(function(p,k){
+      var fretJump=Math.abs(c.f-p.f),stringJump=Math.abs(c.s-p.s);
+      var move=fretJump*0.65+stringJump*0.30;
+      if(fretJump>5)move+=(fretJump-5)*1.4;
+      if(c.midi!==p.midi&&c.f===p.f&&c.s===p.s)move+=5;
+      var v=dp[i-1][k]+c.cost+move;
+      if(v<best){best=v;bi=k;}
+    });
+    dp[i][j]=best;back[i][j]=bi;
+  });});
+  var last=0;for(var j=1;j<dp[dp.length-1].length;j++)if(dp[dp.length-1][j]<dp[dp.length-1][last])last=j;
+  var chosen=new Array(src.length);for(var i=src.length-1;i>=0;i--){chosen[i]=layers[i][last];last=back[i][last];}
+  return src.map(function(n,i){return {s:chosen[i].s,f:chosen[i].f,b:n.b,d:n.d,midi:n.midi,playedMidi:chosen[i].midi,octaveShift:bestShift};});
 }
 function arrMelodyFromMidi(midiAB,lowG,diff){
   var u=arrParseMidiMelodyExact(midiAB),groups=[],i=0,ns=u.notes;
@@ -659,16 +687,23 @@ function arrMelodyFromMidi(midiAB,lowG,diff){
   /* Retire le silence déjà présent au début du MIDI. Le départ sera géré une seule fois par l'intro / le repère vocal. */
   var midiLeadIn=groups.length?groups[0].b:0;
   groups=groups.map(function(n){return {b:Math.max(0,n.b-midiLeadIn),d:n.d,midi:n.midi};});
-  var q=diff==="Très facile"?0.5:diff==="Débutant"?0.25:0.125;
-  var clean=[],lastB=-999;
+  /* La difficulté ne supprime plus de notes de la mélodie.
+     Elle servira uniquement à proposer un doigté plus simple. On conserve le rythme MIDI
+     avec une quantification très fine (1/32 de noire) pour éviter l'effet mécanique. */
+  var q=0.03125,clean=[];
   groups.forEach(function(n){
     var b=Math.max(0,Math.round(n.b/q)*q),d=Math.max(q,Math.round(n.d/q)*q);
-    if(diff==="Très facile"&&b-lastB<0.75)return;
-    if(diff==="Débutant"&&b-lastB<0.375)return;
-    if(clean.length&&Math.abs(clean[clean.length-1].b-b)<0.0001){if(n.d>clean[clean.length-1].d)clean[clean.length-1]=n;return;}
-    clean.push({b:+b.toFixed(4),d:+d.toFixed(4),midi:n.midi});lastB=b;
+    if(clean.length&&Math.abs(clean[clean.length-1].b-b)<0.0001){
+      /* En cas de doublon réel, garde la note la plus longue, pas une nouvelle note inventée. */
+      if(n.d>clean[clean.length-1].d)clean[clean.length-1]={b:+b.toFixed(5),d:+d.toFixed(5),midi:n.midi};
+      return;
+    }
+    clean.push({b:+b.toFixed(5),d:+d.toFixed(5),midi:n.midi});
   });
-  for(var k=0;k<clean.length-1;k++){var gap=clean[k+1].b-clean[k].b;clean[k].d=Math.max(q,Math.min(clean[k].d,gap));}
+  for(var k=0;k<clean.length-1;k++){
+    var gap=clean[k+1].b-clean[k].b;
+    clean[k].d=Math.max(q,Math.min(clean[k].d,gap));
+  }
   var out=arrAssignPhrasePositions(clean,lowG);
   return {bpm:u.bpm,notes:out,chords:[],sourceDurationBeats:out.length?out[out.length-1].b+out[out.length-1].d:0,sourceTrack:u.track,trackCount:u.trackCount,midiLeadInBeats:midiLeadIn};
 }
