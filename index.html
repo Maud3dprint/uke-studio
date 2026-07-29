@@ -574,44 +574,56 @@ function arrParseMidiMelodyExact(buf){
   if(str(4)!=="MThd")throw new Error("Ce fichier n'est pas un MIDI valide.");
   var hl=u32(),format=u16(),ntrk=u16(),div=u16();p+=hl-6;
   if(div&0x8000)throw new Error("Le format temporel SMPTE de ce MIDI n'est pas pris en charge.");
-  var tracks=[],tempoEvents=[];
+  var streams={},tempoEvents=[];
+  function stream(tr,ch){var k=tr+":"+ch;if(!streams[k])streams[k]={index:tr,channel:ch,notes:[]};return streams[k];}
   for(var tr=0;tr<ntrk&&p<dv.byteLength-8;tr++){
-    var id=str(4),len=u32(),end=Math.min(p+len,dv.byteLength),tick=0,run=0,open={},notes=[];
+    var id=str(4),len=u32(),end=Math.min(p+len,dv.byteLength),tick=0,run=0,open={};
     if(id!=="MTrk"){p=end;continue;}
     while(p<end){
-      tick+=vlq(); if(p>=end)break;
-      var st=dv.getUint8(p); if(st&128){p++;run=st;}else st=run;
+      tick+=vlq();if(p>=end)break;
+      var st=dv.getUint8(p);if(st&128){p++;run=st;}else st=run;
       var hi=st&240,ch=st&15;
-      if(st===255){
-        var meta=dv.getUint8(p++),l=vlq();
-        if(meta===81&&l===3){var us=(dv.getUint8(p)<<16)|(dv.getUint8(p+1)<<8)|dv.getUint8(p+2);tempoEvents.push({tick:tick,us:us});}
-        p+=l;
-      }else if(st===240||st===247){var sl=vlq();p+=sl;}
+      if(st===255){var meta=dv.getUint8(p++),l=vlq();if(meta===81&&l===3){var us=(dv.getUint8(p)<<16)|(dv.getUint8(p+1)<<8)|dv.getUint8(p+2);tempoEvents.push({tick:tick,us:us});}p+=l;}
+      else if(st===240||st===247){var sl=vlq();p+=sl;}
       else if(hi===144||hi===128){
         var note=dv.getUint8(p++),vel=dv.getUint8(p++),key=ch+":"+note;
+        if(ch===9)continue; /* canal batterie MIDI : jamais une mélodie vocale */
         if(hi===144&&vel>0){(open[key]=open[key]||[]).push({tick:tick,midi:note,vel:vel,track:tr,channel:ch});}
-        else{var o=open[key]&&open[key].shift();if(o){o.endTick=Math.max(tick,o.tick+1);o.b=o.tick/div;o.d=(o.endTick-o.tick)/div;notes.push(o);}}
-      }else if(hi===160||hi===176||hi===224){p+=2;}
-      else if(hi===192||hi===208){p+=1;}
-      else{p+=1;}
+        else{var o=open[key]&&open[key].shift();if(o){o.endTick=Math.max(tick,o.tick+1);o.b=o.tick/div;o.d=(o.endTick-o.tick)/div;stream(tr,ch).notes.push(o);}}
+      }else if(hi===160||hi===176||hi===224)p+=2;
+      else if(hi===192||hi===208)p+=1;
+      else p+=1;
     }
-    for(var k in open)while(open[k]&&open[k].length){var o2=open[k].shift();o2.endTick=Math.max(tick,o2.tick+1);o2.b=o2.tick/div;o2.d=(o2.endTick-o2.tick)/div;notes.push(o2);}
-    notes.sort(function(a,b){return a.b-b.b||a.midi-b.midi;});
-    if(notes.length)tracks.push({index:tr,notes:notes});
+    for(var k in open)while(open[k]&&open[k].length){var o2=open[k].shift();o2.endTick=Math.max(tick,o2.tick+1);o2.b=o2.tick/div;o2.d=(o2.endTick-o2.tick)/div;stream(tr,o2.channel).notes.push(o2);}
     p=end;
   }
   tempoEvents.sort(function(a,b){return a.tick-b.tick;});
   var firstTempo=tempoEvents.length?tempoEvents[0].us:500000;
   var bpm=Math.max(30,Math.min(240,Math.round(60000000/firstTempo)));
-  if(!tracks.length)throw new Error("Aucune note trouvée dans le MIDI vocal.");
-  function scoreTrack(t){
-    var ns=t.notes,onsets={},sim=0,lo=127,hi=0,sum=0;
-    ns.forEach(function(n){var k=n.b.toFixed(4);onsets[k]=(onsets[k]||0)+1;if(onsets[k]>1)sim++;lo=Math.min(lo,n.midi);hi=Math.max(hi,n.midi);sum+=n.midi;});
-    var avg=sum/ns.length,poly=sim/ns.length,range=hi-lo;
-    return ns.length*(1-poly*2.5)+(avg>=48&&avg<=88?ns.length*.25:0)-(range>36?ns.length*.15:0);
+  var tracks=Object.keys(streams).map(function(k){var t=streams[k];t.notes.sort(function(a,b){return a.b-b.b||a.midi-b.midi;});return t;}).filter(function(t){return t.notes.length>=3;});
+  if(!tracks.length)throw new Error("Aucune ligne mélodique exploitable trouvée dans le MIDI.");
+  function metrics(t){
+    var ns=t.notes,onsets={},polyCount=0,lo=127,hi=0,sum=0,step=0,repeats=0,long=0;
+    ns.forEach(function(n,i){var k=n.b.toFixed(4);onsets[k]=(onsets[k]||0)+1;if(onsets[k]===2)polyCount++;lo=Math.min(lo,n.midi);hi=Math.max(hi,n.midi);sum+=n.midi;long+=Math.min(n.d,4);if(i){step+=Math.abs(n.midi-ns[i-1].midi);if(n.midi===ns[i-1].midi)repeats++;}});
+    var unique=Object.keys(onsets).length,poly=polyCount/Math.max(1,unique),avg=sum/ns.length,range=hi-lo,avgStep=step/Math.max(1,ns.length-1),repeatRate=repeats/Math.max(1,ns.length-1),duration=ns[ns.length-1].b+ns[ns.length-1].d;
+    return {poly:poly,avg:avg,range:range,avgStep:avgStep,repeatRate:repeatRate,duration:duration,unique:unique,count:ns.length};
   }
-  tracks.sort(function(a,b){return scoreTrack(b)-scoreTrack(a);});
-  return {bpm:bpm,notes:tracks[0].notes,track:tracks[0].index,trackCount:tracks.length};
+  function scoreTrack(t){
+    var m=metrics(t),s=0;
+    s+=Math.min(m.unique,400)*0.9;
+    s-=m.poly*260;                         /* une voix est surtout monophonique */
+    s-=Math.max(0,m.repeatRate-.38)*120;   /* pénalise les ostinatos */
+    s-=Math.max(0,m.avgStep-8)*5;          /* pénalise les grands sauts constants */
+    s-=Math.max(0,m.range-30)*2;
+    if(m.avg>=52&&m.avg<=84)s+=35;
+    if(m.duration>=8)s+=20;
+    if(m.count>1500)s-=80;
+    return s;
+  }
+  tracks.forEach(function(t){t.metrics=metrics(t);t.score=scoreTrack(t);});
+  tracks.sort(function(a,b){return b.score-a.score;});
+  var best=tracks[0];
+  return {bpm:bpm,notes:best.notes,track:best.index,channel:best.channel,trackCount:tracks.length,choices:tracks.map(function(t){return {track:t.index,channel:t.channel,count:t.notes.length,score:+t.score.toFixed(1),poly:+t.metrics.poly.toFixed(3),range:t.metrics.range};})};
 }
 function arrAssignPhrasePositions(src,lowG){
   var OPEN=lowG?[55,60,64,69]:[67,60,64,69]; /* indices internes G,C,E,A */
@@ -705,7 +717,7 @@ function arrMelodyFromMidi(midiAB,lowG,diff){
     clean[k].d=Math.max(q,Math.min(clean[k].d,gap));
   }
   var out=arrAssignPhrasePositions(clean,lowG);
-  return {bpm:u.bpm,notes:out,chords:[],sourceDurationBeats:out.length?out[out.length-1].b+out[out.length-1].d:0,sourceTrack:u.track,trackCount:u.trackCount,midiLeadInBeats:midiLeadIn};
+  return {bpm:u.bpm,notes:out,chords:[],sourceDurationBeats:out.length?out[out.length-1].b+out[out.length-1].d:0,sourceTrack:u.track,sourceChannel:u.channel,trackCount:u.trackCount,trackChoices:u.choices||[],midiLeadInBeats:midiLeadIn};
 }
 function arrIntroMeasuresValue(v){
   if(v==="1 mesure")return 1;if(v==="2 mesures")return 2;if(v==="4 mesures")return 4;if(v==="aucune")return 0;return null;
@@ -777,7 +789,7 @@ function arrParse(txt){
 function arrBuildSong(data,title,lowG,style,mode){
   var bpm=Math.max(30,Math.min(240,Math.round(data.bpm||90)));
   var seen={},notes=[];
-  var Q=mode==="Mélodie vocale au ukulélé"?0.25:0.5;
+  var Q=mode==="Mélodie vocale au ukulélé"?0.03125:0.5;
   (data.notes||[]).forEach(function(n){
     var s=Math.max(0,Math.min(3,n.s|0)),f=Math.max(0,Math.min(15,Math.round(n.f))),
         b=Math.max(0,Math.round((+n.b||0)/Q)*Q),d=Math.max(Q,Math.round((+n.d||Q)/Q)*Q);
@@ -817,10 +829,22 @@ function ArrangeurScreen(props){
   var INTROS=["aucune","1 mesure","2 mesures","4 mesures","automatique"];
   function load(key,isBlob){return function(ev){var file=ev.target.files&&ev.target.files[0];if(!file)return;
     setNames(function(o){var c=Object.assign({},o);c[key]=file.name;return c;});
-    if(isBlob){f.current[key+"Blob"]=file;if(key==="voix"){try{if(f.current.voiceUrl)URL.revokeObjectURL(f.current.voiceUrl);}catch(e){}var u=URL.createObjectURL(file);f.current.voiceUrl=u;setVoiceUrl(u);setVocalOffset(0);}}else{file.arrayBuffer().then(function(ab){f.current[key+"AB"]=ab;});}};}
+    if(isBlob){f.current[key+"Blob"]=file;if(key==="voix"){try{if(f.current.voiceUrl)URL.revokeObjectURL(f.current.voiceUrl);}catch(e){}var u=URL.createObjectURL(file);f.current.voiceUrl=u;setVoiceUrl(u);setVocalOffset(0);}}
+    else{
+      /* Efface immédiatement l'ancien fichier : il ne doit jamais être réutilisé pendant le chargement du nouveau. */
+      f.current[key+"AB"]=null;f.current[key+"Loading"]=true;
+      var token=(f.current[key+"Token"]||0)+1;f.current[key+"Token"]=token;
+      f.current[key+"Promise"]=file.arrayBuffer().then(function(ab){
+        if(f.current[key+"Token"]===token){f.current[key+"AB"]=ab;f.current[key+"Loading"]=false;}
+        return ab;
+      }).catch(function(err){if(f.current[key+"Token"]===token)f.current[key+"Loading"]=false;throw err;});
+    }
+  };}
   async function genOne(vi){
     setBusy(true);setMsg("\u23f3 Analyse du morceau\u2026");
     try{
+      if(f.current.midiLoading&&f.current.midiPromise){setMsg("⏳ Chargement complet du nouveau MIDI…");await f.current.midiPromise;}
+      if(f.current.xmlLoading&&f.current.xmlPromise){await f.current.xmlPromise;}
       var title=(names.voix||names.midi||"Arrangement").replace(/\.[^.]+$/," ")+" — v"+vi;
       var song;
       if(mode==="Mélodie vocale au ukulélé"){
@@ -830,6 +854,8 @@ function ArrangeurScreen(props){
         data.bpm=Math.max(30,Math.min(240,Number(manualBpm)||90));
         song=arrBuildSong(data,title,low,style,mode);
         song.midiLeadInBeats=data.midiLeadInBeats||0;
+        song.midiSourceTrack=data.sourceTrack;song.midiSourceChannel=data.sourceChannel;song.midiTrackChoices=data.trackChoices||[];
+        song.melodySignature=(data.notes||[]).slice(0,24).map(function(n){return n.midi+"@"+(+n.b).toFixed(3);}).join("|");
       }else{
         var sum=await arrAnalyze({midiAB:f.current.midiAB,xmlAB:f.current.xmlAB,voixBlob:f.current.voixBlob,instruBlob:f.current.instruBlob});
         setMsg("⏳ Génération de l'accompagnement (variante "+vi+")…");
@@ -846,7 +872,7 @@ function ArrangeurScreen(props){
         var spb=60/song.bpm,mm=Math.ceil(song.sections[0].to/song.meter),anch=[];for(var x=0;x<=mm+1;x++)anch.push(x*song.meter*spb);
         try{await ee.add({id:song.id,blob:mp3,anchors:anch,nudge:effectiveStart,shift:0,rate:1});}catch(e){}}
       setVars(function(a){return a.concat([song]);});
-      setMsg("\u2713 Variante "+vi+" pr\u00eate ("+song.notes.length+" notes"+(mode==="Mélodie vocale au ukulélé"?", départ à "+effectiveStart.toFixed(2)+" s · intro "+song.introMeasures+" mesure(s)":"")+").");
+      setMsg("✓ Variante "+vi+" prête ("+song.notes.length+" notes"+(mode==="Mélodie vocale au ukulélé"?", piste MIDI "+song.midiSourceTrack+" / canal "+(song.midiSourceChannel+1)+", départ "+effectiveStart.toFixed(2)+" s · intro "+song.introMeasures+" mesure(s)":"")+").");
     }catch(e){setMsg("\u2716 "+e.message);}
     setBusy(false);
   }
