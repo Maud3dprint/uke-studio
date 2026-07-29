@@ -565,6 +565,25 @@ function PickMidiScreen(props){
 
 /* ===== MODE ARRANGEUR IA (module indépendant : n'affecte aucun mode existant) ===== */
 /* réutilise pkParseMIDI, He (accords GCEA), ps() (clé API), ee (storage), E (React), r (jsx) déjà présents */
+function arrMelodyFromMidi(midiAB,lowG,diff){
+  var u=pkParseMIDI(midiAB),STR=["A","E","C","G"],spb=60/(u.bpm||90);
+  var src=pkGroups(u.notes).map(function(g){
+    var midi=Math.max.apply(null,g.mids),sf=pkAssign(midi,lowG);
+    return {t:g.t,dur:Math.max(0.08,g.dur||0.2),midi:midi,s:STR.indexOf(sf.s),f:sf.f};
+  });
+  var q=diff==="Très facile"?1:diff==="Débutant"?0.5:0.25;
+  var out=[],lastB=-999;
+  src.forEach(function(n){
+    var b=Math.max(0,Math.round((n.t/spb)/q)*q);
+    var d=Math.max(q,Math.round((n.dur/spb)/q)*q);
+    if(diff==="Très facile"&&b-lastB<1.5)return;
+    if(diff==="Débutant"&&b-lastB<0.75)return;
+    if(out.length&&Math.abs(out[out.length-1].b-b)<0.001){if(n.midi>out[out.length-1].midi)out[out.length-1]={s:n.s,f:n.f,b:b,d:d,midi:n.midi};return;}
+    out.push({s:n.s,f:n.f,b:+b.toFixed(4),d:+d.toFixed(4),midi:n.midi});lastB=b;
+  });
+  for(var i=0;i<out.length-1;i++)out[i].d=Math.max(q,Math.min(out[i].d,out[i+1].b-out[i].b));
+  return {bpm:u.bpm||90,notes:out,chords:[],sourceDuration:u.dur};
+}
 function arrChordsFromMidi(notes,spb,meter,nMeas){
   var measSec=spb*meter,open=[67,60,64,69],tmpl={};      // He = [G,C,E,A]
   for(var nm in He){var fr=He[nm],pcs={};for(var i=0;i<4;i++)pcs[(open[i]+fr[i])%12]=1;tmpl[nm]=pcs;}
@@ -606,7 +625,7 @@ function arrPrompt(sum,style,mode,diff,intro,vi){
     +"CONSIGNES : style « "+style+" », mode de jeu « "+mode+" », difficulté « "+diff+" », introduction « "+intro+" » (mesures d'intro avant que la voix entre). "
     +"Variante n°"+vi+" : rends-la nettement différente des précédentes tout en gardant les accords. "
     +"Adapte la densité à la difficulté (Très facile = très aéré, Avancé = plus riche). Sous la voix, allège ; dans les respirations, tu peux enrichir. "
-    +"RÈGLES STRICTES : frettes 0 à 15 ; au plus 3 notes simultanées ; respecte les accords fournis ; notes calées sur des demi-temps (0.5) ; garde-le réaliste pour une main. "
+    +"RÈGLES STRICTES : frettes 0 à 15 ; au plus 3 notes simultanées ; respecte les accords fournis ; choisis une densité naturelle selon le BPM, le style et la difficulté ; ne remplis pas automatiquement chaque demi-temps ; garde-le réaliste pour une main. "
     +"IMPORTANT : garde l'arrangement COMPACT (au plus ~48 mesures, un motif qui se répète) et TERMINE complètement le JSON, ne le coupe pas. "+"RÉPONDS UNIQUEMENT EN JSON STRICT, sans texte ni balises autour, au format exact : "
     +'{"bpm":NOMBRE,"meter":4,"notes":[{"s":0-3,"f":0-15,"b":TEMPS_DECIMAL,"d":DUREE_TEMPS}],"chords":[{"name":"C","b":TEMPS}]}';
 }
@@ -632,9 +651,10 @@ function arrParse(txt){
 function arrBuildSong(data,title,lowG,style,mode){
   var bpm=Math.max(30,Math.min(240,Math.round(data.bpm||90)));
   var seen={},notes=[];
+  var Q=mode==="Mélodie vocale au ukulélé"?0.25:0.5;
   (data.notes||[]).forEach(function(n){
     var s=Math.max(0,Math.min(3,n.s|0)),f=Math.max(0,Math.min(15,Math.round(n.f))),
-        b=Math.max(0,Math.round((+n.b||0)/0.5)*0.5),d=Math.max(0.5,Math.round((+n.d||0.5)/0.5)*0.5);
+        b=Math.max(0,Math.round((+n.b||0)/Q)*Q),d=Math.max(Q,Math.round((+n.d||Q)/Q)*Q);
     var k=s+":"+b;if(seen[k])return;                 // 1 note par corde/temps
     var cntB=0;for(var kk in seen)if(kk.split(":")[1]==b)cntB++;if(cntB>=3)return; // <=3 simultanées
     seen[k]=1;notes.push({s:s,f:f,b:b,d:d});
@@ -651,34 +671,46 @@ function ArrangeurScreen(props){
   var f=(0,E.useRef)({});
   var v=(0,E.useState)({voix:"",instru:"",midi:"",xml:""}),names=v[0],setNames=v[1];
   var stStyle=(0,E.useState)("folk"),style=stStyle[0],setStyle=stStyle[1];
-  var stMode=(0,E.useState)("Arp\u00e8ge + Picking"),mode=stMode[0],setMode=stMode[1];
+  var stMode=(0,E.useState)("Mélodie vocale au ukulélé"),mode=stMode[0],setMode=stMode[1];
   var stDiff=(0,E.useState)("Facile"),diff=stDiff[0],setDiff=stDiff[1];
   var stIntro=(0,E.useState)("automatique"),intro=stIntro[0],setIntro=stIntro[1];
   var stLow=(0,E.useState)(false),low=stLow[0],setLow=stLow[1];
+  var stOffset=(0,E.useState)(0),vocalOffset=stOffset[0],setVocalOffset=stOffset[1];
+  var stVoiceUrl=(0,E.useState)(""),voiceUrl=stVoiceUrl[0],setVoiceUrl=stVoiceUrl[1];
+  var voiceAudioRef=(0,E.useRef)(null);
   var stMsg=(0,E.useState)(""),msg=stMsg[0],setMsg=stMsg[1];
   var stBusy=(0,E.useState)(false),busy=stBusy[0],setBusy=stBusy[1];
   var stVars=(0,E.useState)([]),variants=stVars[0],setVars=stVars[1];
   var viRef=(0,E.useRef)(0);
   var STYLES=["country","folk","cin\u00e9matique","berceuse","pop douce","blues","hawa\u00efen","celtique","fingerstyle moderne"];
-  var MODES=["Arp\u00e8ge","Picking","Arp\u00e8ge + Picking","Accords","Accords + Picking","Accords + Arp\u00e8ge"];
+  var MODES=["Mélodie vocale au ukulélé","Picking d’accompagnement","Arpège d’accompagnement","Accords","Accords + Picking","Accords + Arpège"];
   var DIFFS=["Tr\u00e8s facile","D\u00e9butant","Facile","Interm\u00e9diaire","Avanc\u00e9"];
   var INTROS=["aucune","1 mesure","2 mesures","4 mesures","automatique"];
   function load(key,isBlob){return function(ev){var file=ev.target.files&&ev.target.files[0];if(!file)return;
     setNames(function(o){var c=Object.assign({},o);c[key]=file.name;return c;});
-    if(isBlob){f.current[key+"Blob"]=file;}else{file.arrayBuffer().then(function(ab){f.current[key+"AB"]=ab;});}};}
+    if(isBlob){f.current[key+"Blob"]=file;if(key==="voix"){try{if(f.current.voiceUrl)URL.revokeObjectURL(f.current.voiceUrl);}catch(e){}var u=URL.createObjectURL(file);f.current.voiceUrl=u;setVoiceUrl(u);setVocalOffset(0);}}else{file.arrayBuffer().then(function(ab){f.current[key+"AB"]=ab;});}};}
   async function genOne(vi){
     setBusy(true);setMsg("\u23f3 Analyse du morceau\u2026");
     try{
-      var sum=await arrAnalyze({midiAB:f.current.midiAB,xmlAB:f.current.xmlAB,voixBlob:f.current.voixBlob,instruBlob:f.current.instruBlob});
-      setMsg("\u23f3 G\u00e9n\u00e9ration de l'arrangement (variante "+vi+")\u2026");
-      var txt=await arrCallClaude(arrPrompt(sum,style,mode,diff,intro,vi),8000);
-      var data=arrParse(txt);
-      var song=arrBuildSong(data,(names.voix||names.midi||"Arrangement").replace(/\.[^.]+$/,"")+" \u2014 v"+vi,low,style,mode);
+      var title=(names.voix||names.midi||"Arrangement").replace(/\.[^.]+$/," ")+" — v"+vi;
+      var song;
+      if(mode==="Mélodie vocale au ukulélé"){
+        if(!f.current.midiAB)throw new Error("Ajoute le MIDI vocal : il est indispensable pour retranscrire fidèlement la mélodie.");
+        setMsg("⏳ Transcription fidèle du MIDI vocal…");
+        var data=arrMelodyFromMidi(f.current.midiAB,low,diff);
+        song=arrBuildSong(data,title,low,style,mode);
+      }else{
+        var sum=await arrAnalyze({midiAB:f.current.midiAB,xmlAB:f.current.xmlAB,voixBlob:f.current.voixBlob,instruBlob:f.current.instruBlob});
+        setMsg("⏳ Génération de l'accompagnement (variante "+vi+")…");
+        var txt=await arrCallClaude(arrPrompt(sum,style,mode,diff,intro,vi),8000);
+        var data2=arrParse(txt);
+        song=arrBuildSong(data2,title,low,style,mode);
+      }
       if(f.current.instruBlob||f.current.voixBlob){var mp3=f.current.instruBlob||f.current.voixBlob;
         var spb=60/song.bpm,mm=Math.ceil(song.sections[0].to/song.meter),anch=[];for(var x=0;x<=mm+1;x++)anch.push(x*song.meter*spb);
-        try{await ee.add({id:song.id,blob:mp3,anchors:anch,nudge:0,shift:0,rate:1});}catch(e){}}
+        try{await ee.add({id:song.id,blob:mp3,anchors:anch,nudge:mode==="Mélodie vocale au ukulélé"?vocalOffset:0,shift:0,rate:1});song.vocalOffset=mode==="Mélodie vocale au ukulélé"?vocalOffset:0;}catch(e){}}
       setVars(function(a){return a.concat([song]);});
-      setMsg("\u2713 Variante "+vi+" pr\u00eate ("+song.notes.length+" notes).");
+      setMsg("\u2713 Variante "+vi+" pr\u00eate ("+song.notes.length+" notes"+(mode==="Mélodie vocale au ukulélé"?", début vocal "+vocalOffset.toFixed(2)+" s":"")+").");
     }catch(e){setMsg("\u2716 "+e.message);}
     setBusy(false);
   }
@@ -692,11 +724,22 @@ function ArrangeurScreen(props){
     (0,r.jsx)("h2",{children:"\ud83c\udfbc Arrangeur IA"}),
     (0,r.jsx)("p",{style:{color:"#aeb8c7"},children:"Importe tes fichiers, choisis le style, le mode, la difficult\u00e9 et l'intro. L'IA cr\u00e9e des accompagnements de ukul\u00e9l\u00e9 jouables, ouverts dans \u00ab Jouer \u00bb o\u00f9 tu peux tout modifier."}),
     (0,r.jsxs)("label",{style:drop,children:["\ud83c\udfa4 Voix (MP3) \u2014 ",names.voix||"aucun",(0,r.jsx)("input",{type:"file",accept:"audio/*",style:{display:"none"},onChange:load("voix",true)})]}),
+    voiceUrl?(0,r.jsxs)("div",{style:{border:"1px solid var(--bd2)",borderRadius:12,padding:10,marginBottom:10,background:"var(--c1)"},children:[
+      (0,r.jsx)("div",{style:{fontSize:12,fontWeight:700,marginBottom:7},children:"Synchroniser le début de la voix"}),
+      (0,r.jsx)("audio",{ref:voiceAudioRef,src:voiceUrl,controls:true,preload:"metadata",style:{width:"100%",marginBottom:8}}),
+      (0,r.jsx)("button",{type:"button",onClick:function(){var a=voiceAudioRef.current;if(a)setVocalOffset(Math.max(0,Math.round(a.currentTime*100)/100));},style:{background:"#5fd6a7",color:"#161a24",border:0,borderRadius:9,padding:"8px 12px",fontWeight:700,marginBottom:8},children:"\ud83d\udccd La voix commence ici"}),
+      (0,r.jsxs)("div",{style:{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"},children:[
+        [-.1,-.01,.01,.1].map(function(d){return (0,r.jsx)("button",{type:"button",onClick:function(){setVocalOffset(function(v){return Math.max(0,Math.round((v+d)*100)/100);});},style:{background:"transparent",color:"var(--tsoft)",border:"1px solid var(--bd2)",borderRadius:8,padding:"6px 8px",fontWeight:700},children:(d>0?"+":"")+d.toFixed(2)+" s"},d);}),
+        (0,r.jsxs)("span",{style:{fontSize:13,fontWeight:800,color:"#82ac32",marginLeft:4},children:["Début vocal : ",vocalOffset.toFixed(2)," s"]})
+      ]}),
+      (0,r.jsx)("div",{style:{fontSize:11,color:"var(--tmut)",marginTop:7,lineHeight:1.4},children:"Lance l’audio, mets pause sur la toute première note chantée, puis touche « La voix commence ici ». La mélodie ukulélé sera placée exactement à ce moment sans être étirée."})
+    ]}):null,
     (0,r.jsxs)("label",{style:drop,children:["\ud83c\udfb9 Instrumental (MP3) \u2014 ",names.instru||"aucun",(0,r.jsx)("input",{type:"file",accept:"audio/*",style:{display:"none"},onChange:load("instru",true)})]}),
-    (0,r.jsxs)("label",{style:drop,children:["\ud83c\udfbc MIDI (option, pour notes & accords) \u2014 ",names.midi||"aucun",(0,r.jsx)("input",{type:"file",style:{display:"none"},onChange:load("midi",false)})]}),
+    (0,r.jsxs)("label",{style:drop,children:["\ud83c\udfbc MIDI vocal ou instrumental \u2014 ",names.midi||"aucun",(0,r.jsx)("input",{type:"file",style:{display:"none"},onChange:load("midi",false)})]}),
     (0,r.jsxs)("label",{style:drop,children:["\ud83d\udcc4 MusicXML (option) \u2014 ",names.xml||"aucun",(0,r.jsx)("input",{type:"file",style:{display:"none"},onChange:load("xml",false)})]}),
     (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Style"}),chips(STYLES,style,setStyle),
     (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Mode de jeu"}),chips(MODES,mode,setMode),
+    mode==="Mélodie vocale au ukulélé"?(0,r.jsx)("div",{style:{fontSize:12,color:"#5fd6a7",margin:"-4px 0 10px",lineHeight:1.45},children:"Le MIDI vocal est retranscrit note par note. Le style ne remplace plus la mélodie."}):((mode==="Picking d’accompagnement"||mode==="Arpège d’accompagnement")&&!names.xml?(0,r.jsx)("div",{style:{fontSize:12,color:"#f2b34c",margin:"-4px 0 10px",lineHeight:1.45},children:"Pour un accompagnement fidèle, ajoute un MusicXML ou un MIDI contenant les accords. Un MIDI vocal seul ne suffit pas pour connaître l’harmonie."}):null),
     (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Difficult\u00e9"}),chips(DIFFS,diff,setDiff),
     (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Introduction"}),chips(INTROS,intro,setIntro),
     (0,r.jsxs)("label",{style:{display:"block",margin:"4px 0 10px"},children:[(0,r.jsx)("input",{type:"checkbox",checked:low,onChange:function(e){setLow(e.target.checked);}})," Accordage Low-G"]}),
