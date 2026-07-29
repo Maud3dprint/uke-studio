@@ -765,6 +765,7 @@ function ArrangeurScreen(props){
   var stMode=(0,E.useState)("Mélodie vocale au ukulélé"),mode=stMode[0],setMode=stMode[1];
   var stDiff=(0,E.useState)("Facile"),diff=stDiff[0],setDiff=stDiff[1];
   var stIntro=(0,E.useState)("automatique"),intro=stIntro[0],setIntro=stIntro[1];
+  var stBpm=(0,E.useState)(90),manualBpm=stBpm[0],setManualBpm=stBpm[1];
   var stLow=(0,E.useState)(false),low=stLow[0],setLow=stLow[1];
   var stOffset=(0,E.useState)(0),vocalOffset=stOffset[0],setVocalOffset=stOffset[1];
   var stVoiceUrl=(0,E.useState)(""),voiceUrl=stVoiceUrl[0],setVoiceUrl=stVoiceUrl[1];
@@ -791,6 +792,7 @@ function ArrangeurScreen(props){
         if(!f.current.midiAB)throw new Error("Ajoute le MIDI vocal : il est indispensable pour retranscrire fidèlement la mélodie.");
         setMsg("⏳ Transcription fidèle du MIDI vocal…");
         var data=arrMelodyFromMidi(f.current.midiAB,low,diff);
+        data.bpm=Math.max(30,Math.min(240,Number(manualBpm)||90));
         song=arrBuildSong(data,title,low,style,mode);
         song.midiLeadInBeats=data.midiLeadInBeats||0;
       }else{
@@ -798,6 +800,7 @@ function ArrangeurScreen(props){
         setMsg("⏳ Génération de l'accompagnement (variante "+vi+")…");
         var txt=await arrCallClaude(arrPrompt(sum,style,mode,diff,intro,vi),8000);
         var data2=arrParse(txt);
+        data2.bpm=Math.max(30,Math.min(240,Number(manualBpm)||90));
         song=arrBuildSong(data2,title,low,style,mode);
       }
       var introCount=arrIntroMeasuresValue(intro),spbSync=60/song.bpm;
@@ -880,6 +883,14 @@ function ArrangeurScreen(props){
     (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Mode de jeu"}),chips(MODES,mode,setMode),
     mode==="Mélodie vocale au ukulélé"?(0,r.jsx)("div",{style:{fontSize:12,color:"#5fd6a7",margin:"-4px 0 10px",lineHeight:1.45},children:"Le MIDI vocal est retranscrit note par note. Le style ne remplace plus la mélodie."}):((mode==="Picking d’accompagnement"||mode==="Arpège d’accompagnement")&&!names.xml?(0,r.jsx)("div",{style:{fontSize:12,color:"#f2b34c",margin:"-4px 0 10px",lineHeight:1.45},children:"Pour un accompagnement fidèle, ajoute un MusicXML ou un MIDI contenant les accords. Un MIDI vocal seul ne suffit pas pour connaître l’harmonie."}):null),
     (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Difficult\u00e9"}),chips(DIFFS,diff,setDiff),
+    (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"8px 0 5px"},children:"Tempo du morceau (BPM)"}),
+    (0,r.jsxs)("div",{style:{display:"flex",alignItems:"center",gap:7,marginBottom:10,flexWrap:"wrap"},children:[
+      (0,r.jsx)("button",{type:"button",onClick:function(){setManualBpm(function(v){return Math.max(30,(Number(v)||90)-1);});},style:{background:"transparent",color:"var(--tsoft)",border:"1px solid var(--bd2)",borderRadius:9,padding:"8px 11px",fontWeight:800},children:"− 1"}),
+      (0,r.jsx)("input",{type:"number",min:30,max:240,step:1,value:manualBpm,onChange:function(e){var v=e.target.value;setManualBpm(v===""?"":Math.max(30,Math.min(240,parseInt(v,10)||30)));},onBlur:function(){setManualBpm(function(v){return Math.max(30,Math.min(240,Number(v)||90));});},style:{width:94,background:"var(--c1)",color:"var(--text)",border:"1px solid #82ac32",borderRadius:9,padding:"9px 10px",fontSize:16,fontWeight:900,textAlign:"center"}}),
+      (0,r.jsx)("button",{type:"button",onClick:function(){setManualBpm(function(v){return Math.min(240,(Number(v)||90)+1);});},style:{background:"transparent",color:"var(--tsoft)",border:"1px solid var(--bd2)",borderRadius:9,padding:"8px 11px",fontWeight:800},children:"+ 1"}),
+      (0,r.jsxs)("span",{style:{fontSize:12,color:"#82ac32",fontWeight:800},children:[manualBpm||90," BPM"]})
+    ]}),
+    (0,r.jsx)("div",{style:{fontSize:11,color:"var(--tmut)",margin:"-4px 0 10px",lineHeight:1.4},children:"Ce BPM est prioritaire sur celui détecté dans le MIDI ou proposé par l’IA. Il règle la vitesse des notes, la durée de chaque mesure, l’introduction et la préécoute."}),
     (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Introduction"}),chips(INTROS,intro,setIntro),
     (0,r.jsxs)("label",{style:{display:"block",margin:"4px 0 10px"},children:[(0,r.jsx)("input",{type:"checkbox",checked:low,onChange:function(e){setLow(e.target.checked);}})," Accordage Low-G"]}),
     msg?(0,r.jsx)("p",{style:{color:"#82ac32"},children:msg}):null,
@@ -889,7 +900,7 @@ function ArrangeurScreen(props){
       (0,r.jsxs)("div",{style:{fontSize:14,fontWeight:800,marginBottom:8},children:["Mes essais sur cette page (",variants.length,")"]}),
       variants.map(function(sg,ix){return (0,r.jsxs)("div",{style:{border:sg.arrSaved?"1px solid #5fd6a7":"1px solid var(--bd2)",borderRadius:12,padding:"11px 12px",marginBottom:9,background:sg.arrSaved?"rgba(95,214,167,.06)":"var(--c1)"},children:[
         (0,r.jsxs)("div",{style:{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:9},children:[
-          (0,r.jsxs)("div",{children:[(0,r.jsx)("div",{style:{fontWeight:800},children:sg.title}),(0,r.jsxs)("div",{style:{color:"var(--tmut)",fontSize:12,marginTop:2},children:[style," · ",mode," · ",sg.notes.length," notes",sg.arrSaved?" · ✓ gardé":""]})]}),
+          (0,r.jsxs)("div",{children:[(0,r.jsx)("div",{style:{fontWeight:800},children:sg.title}),(0,r.jsxs)("div",{style:{color:"var(--tmut)",fontSize:12,marginTop:2},children:[sg.artist.replace("🎼 ","")," · ",sg.bpm," BPM · ",sg.notes.length," notes",sg.arrSaved?" · ✓ gardé":""]})]}),
           (0,r.jsx)("button",{onClick:function(){removeVariant(sg.id);},style:{background:"transparent",color:"#f47272",border:"1px solid #f4727255",borderRadius:8,padding:"6px 9px",fontWeight:700,cursor:"pointer"},children:"🗑 Supprimer"})
         ]}),
         (0,r.jsxs)("div",{style:{display:"flex",gap:7,flexWrap:"wrap"},children:[
