@@ -744,7 +744,7 @@ async function arrVoiceActive(blob,spb,meter,nMeas){
 }
 /* analyse locale → résumé musical compact pour l'IA */
 async function arrAnalyze(files){
-  var sum={meter:4,bpm:90,measures:16,chords:[],voiceActive:[],melodyContour:[],rhythmProfile:[],harmonyProfile:[],songFingerprint:""};
+  var sum={meter:4,bpm:90,measures:16,chords:[],voiceActive:[],melodyContour:[],melodyNotes:[],rhythmProfile:[],harmonyProfile:[],estimatedKey:"inconnue",songFingerprint:""};
   if(files.midiAB){
     try{
       var all=pkParseMIDI(files.midiAB), exact=arrParseMidiMelodyExact(files.midiAB);
@@ -763,6 +763,19 @@ async function arrAnalyze(files){
           var row={b:+(n.b-lead).toFixed(3),d:+n.d.toFixed(3),step:i?Math.max(-12,Math.min(12,n.midi-prevMidi)):0};
           prevMidi=n.midi;lastB=n.b;return row;
         });
+        /* Notes absolues : indispensables pour que deux chansons différentes ne deviennent pas le même motif transposé. */
+        sum.melodyNotes=mn.slice(0,320).map(function(n){
+          var rb=Math.max(0,n.b-lead), pc=((n.midi%12)+12)%12;
+          return {midi:n.midi,pc:pc,b:+rb.toFixed(4),d:+Math.max(0.03125,n.d).toFixed(4),measure:Math.floor(rb/4),inMeasure:+(rb%4).toFixed(4)};
+        });
+        /* Estimation simple de la tonalité à partir de la mélodie réelle. */
+        var pcHist=new Array(12).fill(0);mn.forEach(function(n){pcHist[((n.midi%12)+12)%12]+=Math.max(0.125,n.d||0.125);});
+        var keyNames=["C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"];
+        var major=[0,2,4,5,7,9,11],minor=[0,2,3,5,7,8,10],bestKey="inconnue",bestScore=-1e9;
+        for(var root=0;root<12;root++){
+          [[major," majeur"],[minor," mineur"]].forEach(function(km){var sc=0;for(var pc=0;pc<12;pc++)sc+=pcHist[pc]*(km[0].indexOf((pc-root+12)%12)>=0?1:-0.45);if(sc>bestScore){bestScore=sc;bestKey=keyNames[root]+km[1];}});
+        }
+        sum.estimatedKey=bestKey;
         /* Profil de départs par mesure : aucune grille générique possible. */
         for(var m=0;m<sum.measures;m++){
           var a=m*4,b=a+4,on=[];
@@ -779,7 +792,7 @@ async function arrAnalyze(files){
         sum.harmonyProfile.push(tops.map(function(x){return x.pc+":"+x.n;}));
       }
       if(files.voixBlob){var va=await arrVoiceActive(files.voixBlob,spb,4,sum.measures);if(va)sum.voiceActive=va;}
-      var raw=(sum.melodyContour.slice(0,80).map(function(x){return x.step+"@"+x.b;}).join("|")+"#"+sum.harmonyProfile.slice(0,24).join("/")+"#"+sum.bpm);
+      var raw=(sum.melodyNotes.slice(0,120).map(function(x){return x.midi+"@"+x.b+":"+x.d;}).join("|")+"#"+sum.harmonyProfile.slice(0,24).join("/")+"#"+sum.estimatedKey+"#"+sum.bpm);
       var hash=2166136261;for(var z=0;z<raw.length;z++){hash^=raw.charCodeAt(z);hash=Math.imul(hash,16777619);}sum.songFingerprint=(hash>>>0).toString(16);
     }catch(e){sum.analysisError=String(e&&e.message||e);}
   }
@@ -796,7 +809,7 @@ function arrPrompt(sum,style,mode,intro,vi){
     "Accords + Arpège":"Mélange accords complets, arpèges partiels et renversements. Fais évoluer la texture entre couplets, respirations et fins de phrases ; aucun ostinato unique sur tout le morceau."
   };
   return "Tu es un arrangeur professionnel pour ukulélé GCEA. Tu dois écrire la version LA PLUS TRAVAILLÉE, expressive et musicalement cohérente, mais jouable par une seule personne. "
-    +"ANALYSE RÉELLE DU MORCEAU : "+JSON.stringify(sum)+". L'empreinte "+sum.songFingerprint+" identifie ce morceau : elle doit réellement influencer les notes et le rythme. melodyContour contient les intervalles de la voix ; rhythmProfile ses départs dans chaque mesure ; harmonyProfile les classes de notes dominantes par mesure. "
+    +"ANALYSE RÉELLE DU MORCEAU : "+JSON.stringify(sum)+". L'empreinte "+sum.songFingerprint+" identifie ce morceau. melodyNotes contient les hauteurs MIDI ABSOLUES, leurs mesures, départs et durées : c'est la source principale. melodyContour ne sert qu'à confirmer la direction de la phrase. rhythmProfile fixe les placements rythmiques. harmonyProfile et estimatedKey servent à choisir l'harmonie. Le BPM ne choisit JAMAIS les notes : il convertit seulement les temps en durée audio. "
     +"MODE : "+mode+". "+(modeRules[mode]||"")+" STYLE : "+style+". INTRO : "+intro+". VARIANTE : "+vi+". "
     +"Ne copie jamais un motif standard C-Am-F-G et ne recycle pas un dessin de cordes générique. Construis d'abord une progression harmonique propre à CE fichier, puis un motif qui évolue avec ses phrases. La variante doit changer les renversements, le registre, les réponses et le rythme, sans changer arbitrairement l'harmonie. "
     +"RÈGLES : frettes 0 à 15 ; maximum 4 notes simultanées ; utilise tout le manche quand cela améliore la conduite des voix ; conserve des silences ; varie la densité ; au moins 4 cellules musicales distinctes sur le morceau ; aucune cellule exacte répétée plus de 2 mesures consécutives. "
@@ -882,222 +895,110 @@ function arrApplyRegister(song,register,lowG){
   return c;
 }
 function ArrangeurScreen(props){
-  var onBack=props.onBack,onDone=props.onDone;
-  var f=(0,E.useRef)({});
-  var v=(0,E.useState)({voix:"",instru:"",midi:"",xml:""}),names=v[0],setNames=v[1];
-  var stStyle=(0,E.useState)("folk"),style=stStyle[0],setStyle=stStyle[1];
-  var stMode=(0,E.useState)("Mélodie vocale au ukulélé"),mode=stMode[0],setMode=stMode[1];
-  var stIntro=(0,E.useState)("automatique"),intro=stIntro[0],setIntro=stIntro[1];
+  var onBack=props.onBack;
+  var files=(0,E.useRef)({midiAB:null,midiPromise:null,midiLoading:false,voiceBlob:null,voiceUrl:""});
+  var stNames=(0,E.useState)({midi:"",voix:""}),names=stNames[0],setNames=stNames[1];
   var stBpm=(0,E.useState)(90),manualBpm=stBpm[0],setManualBpm=stBpm[1];
-  var low=false; /* Uke Studio est verrouillé en accordage High-G GCEA */
-  var stRegister=(0,E.useState)("Les deux versions"),register=stRegister[0],setRegister=stRegister[1];
-  var stOffset=(0,E.useState)(0),vocalOffset=stOffset[0],setVocalOffset=stOffset[1];
-  var stVoiceUrl=(0,E.useState)(""),voiceUrl=stVoiceUrl[0],setVoiceUrl=stVoiceUrl[1];
-  var voiceAudioRef=(0,E.useRef)(null);
-  var stMsg=(0,E.useState)(""),msg=stMsg[0],setMsg=stMsg[1];
   var stAnalysis=(0,E.useState)(null),analysis=stAnalysis[0],setAnalysis=stAnalysis[1];
-  var analysisRef=(0,E.useRef)(null);
-  var stAnalyzing=(0,E.useState)(false),analyzing=stAnalyzing[0],setAnalyzing=stAnalyzing[1];
+  var stMsg=(0,E.useState)("Étape 1 : charge un MIDI vocal, puis vérifie exactement la mélodie détectée."),msg=stMsg[0],setMsg=stMsg[1];
   var stBusy=(0,E.useState)(false),busy=stBusy[0],setBusy=stBusy[1];
-  var stVars=(0,E.useState)([]),variants=stVars[0],setVars=stVars[1];
-  var viRef=(0,E.useRef)(0);
-  var previewRef=(0,E.useRef)({ctx:null,audio:null,timer:null,id:null});
-  var stPreview=(0,E.useState)(null),previewId=stPreview[0],setPreviewId=stPreview[1];
-  var STYLES=["country","folk","cin\u00e9matique","berceuse","pop douce","blues","hawa\u00efen","celtique","fingerstyle moderne"];
-  var MODES=["Mélodie vocale au ukulélé","Picking d’accompagnement","Arpège d’accompagnement","Accords","Accords + Picking","Accords + Arpège"];
-  var INTROS=["aucune","1 mesure","2 mesures","4 mesures","automatique"];
-  var REGISTERS=["Les deux versions","Notes basses","Notes hautes"];
-  function load(key,isBlob){return function(ev){var file=ev.target.files&&ev.target.files[0];if(!file)return;
-    setNames(function(o){var c=Object.assign({},o);c[key]=file.name;return c;});
-    analysisRef.current=null;setAnalysis(null);setMsg("Fichiers modifiés : relance l’analyse avant de créer un arrangement.");
-    if(isBlob){f.current[key+"Blob"]=file;if(key==="voix"){try{if(f.current.voiceUrl)URL.revokeObjectURL(f.current.voiceUrl);}catch(e){}var u=URL.createObjectURL(file);f.current.voiceUrl=u;setVoiceUrl(u);setVocalOffset(0);}}
-    else{
-      /* Efface immédiatement l'ancien fichier : il ne doit jamais être réutilisé pendant le chargement du nouveau. */
-      f.current[key+"AB"]=null;f.current[key+"Loading"]=true;
-      var token=(f.current[key+"Token"]||0)+1;f.current[key+"Token"]=token;
-      f.current[key+"Promise"]=file.arrayBuffer().then(function(ab){
-        if(f.current[key+"Token"]===token){f.current[key+"AB"]=ab;f.current[key+"Loading"]=false;}
-        return ab;
-      }).catch(function(err){if(f.current[key+"Token"]===token)f.current[key+"Loading"]=false;throw err;});
-    }
-  };}
-  async function analyzeSong(){
-    if(analyzing||busy)return;
-    setAnalyzing(true);setMsg("⏳ Lecture complète des fichiers et construction de la carte musicale…");
-    try{
-      if(f.current.midiLoading&&f.current.midiPromise)await f.current.midiPromise;
-      if(f.current.xmlLoading&&f.current.xmlPromise)await f.current.xmlPromise;
-      if(!f.current.midiAB&&!f.current.xmlAB&&!f.current.voixBlob&&!f.current.instruBlob)throw new Error("Ajoute au moins un fichier musical avant l’analyse.");
-      var a=await arrAnalyze({midiAB:f.current.midiAB,xmlAB:f.current.xmlAB,voixBlob:f.current.voixBlob,instruBlob:f.current.instruBlob});
-      a.bpmDetected=Math.round(a.bpm||90);
-      a.bpmUsed=Math.max(30,Math.min(240,Number(manualBpm)||a.bpmDetected||90));
-      a.highG=true;
-      a.fileStamp=[names.voix,names.instru,names.midi,names.xml].join("|");
-      analysisRef.current=a;setAnalysis(a);
-      if(a.bpmDetected&&(!manualBpm||Number(manualBpm)===90))setManualBpm(a.bpmDetected);
-      setMsg("✓ Analyse terminée. Vérifie la carte musicale puis crée autant d’arrangements que tu veux.");
-    }catch(e){analysisRef.current=null;setAnalysis(null);setMsg("✖ "+e.message);}
-    setAnalyzing(false);
+  var stPlaying=(0,E.useState)(false),playing=stPlaying[0],setPlaying=stPlaying[1];
+  var playRef=(0,E.useRef)({ctx:null,audio:null,timer:null});
+  function invalidate(text){stopPlayback();setAnalysis(null);setMsg(text||"Fichier modifié : relance l’analyse.");}
+  function loadMidi(ev){
+    var file=ev.target.files&&ev.target.files[0];ev.target.value="";if(!file)return;
+    setNames(function(o){return Object.assign({},o,{midi:file.name});});
+    invalidate("Nouveau MIDI chargé : lance l’analyse pour vérifier la piste vocale.");
+    files.current.midiAB=null;files.current.midiLoading=true;
+    files.current.midiPromise=file.arrayBuffer().then(function(ab){files.current.midiAB=ab;files.current.midiLoading=false;return ab;}).catch(function(e){files.current.midiLoading=false;throw e;});
   }
-  async function genOne(vi){
-    setBusy(true);setMsg("⏳ Préparation de l’arrangement à partir de l’analyse enregistrée…");
-    try{
-      var cached=analysisRef.current;
-      if(!cached)throw new Error("Commence par appuyer sur « Analyser le morceau ». L’arrangement ne sera plus créé à partir d’une analyse rapide improvisée.");
-      if(f.current.midiLoading&&f.current.midiPromise){setMsg("⏳ Chargement complet du nouveau MIDI…");await f.current.midiPromise;}
-      if(f.current.xmlLoading&&f.current.xmlPromise){await f.current.xmlPromise;}
-      var title=(names.voix||names.midi||"Arrangement").replace(/\.[^.]+$/," ")+" — v"+vi;
-      var song;
-      if(mode==="Mélodie vocale au ukulélé"){
-        if(!f.current.midiAB)throw new Error("Ajoute le MIDI vocal : il est indispensable pour retranscrire fidèlement la mélodie.");
-        setMsg("⏳ Transcription fidèle du MIDI vocal…");
-        var data=arrMelodyFromMidi(f.current.midiAB,false);
-        data.bpm=Math.max(30,Math.min(240,Number(manualBpm)||90));
-        song=arrBuildSong(data,title,false,style,mode);
-        song.midiLeadInBeats=data.midiLeadInBeats||0;
-        song.midiSourceTrack=data.sourceTrack;song.midiSourceChannel=data.sourceChannel;song.midiTrackChoices=data.trackChoices||[];
-        song.melodySignature=(data.notes||[]).slice(0,24).map(function(n){return n.midi+"@"+(+n.b).toFixed(3);}).join("|");
-      }else{
-        var sum=Object.assign({},cached,{bpm:Math.max(30,Math.min(240,Number(manualBpm)||cached.bpm||90))});
-        setMsg("⏳ Génération de l'accompagnement (variante "+vi+")…");
-        var txt=await arrCallClaude(arrPrompt(sum,style,mode,intro,vi),8000);
-        var data2=arrParse(txt);
-        data2.bpm=Math.max(30,Math.min(240,Number(manualBpm)||90));
-        song=arrBuildSong(data2,title,false,style,mode);
-        song.songFingerprint=sum.songFingerprint;
-        song.arrangementSignature=(song.notes||[]).slice(0,96).map(function(n){return n.s+":"+n.f+"@"+(+n.b).toFixed(3);}).join("|");
-        var duplicate=variants.some(function(v){return v.arrangementSignature&&v.arrangementSignature===song.arrangementSignature;});
-        if(duplicate){
-          setMsg("⏳ Motif trop proche détecté, nouvelle composition…");
-          var txt2=await arrCallClaude(arrPrompt(sum,style,mode,intro,vi+1000)+" La première proposition a été rejetée car identique à une précédente. Change radicalement les cellules rythmiques, le registre et les renversements.",8000);
-          var d3=arrParse(txt2);d3.bpm=data2.bpm;song=arrBuildSong(d3,title,false,style,mode);
-          song.songFingerprint=sum.songFingerprint;song.arrangementSignature=(song.notes||[]).slice(0,96).map(function(n){return n.s+":"+n.f+"@"+(+n.b).toFixed(3);}).join("|");
-        }
-      }
-      var introCount=arrIntroMeasuresValue(intro),spbSync=60/song.bpm;
-      var effectiveStart=mode==="Mélodie vocale au ukulélé"?(introCount===null?vocalOffset:introCount*song.meter*spbSync):0;
-      song.introMeasures=introCount===null?Math.max(0,Math.round(effectiveStart/(song.meter*spbSync))):introCount;
-      song.vocalOffset=effectiveStart;
-      var made=register==="Les deux versions"?[arrApplyRegister(song,"bas",false),arrApplyRegister(song,"haut",false)]:[arrApplyRegister(song,register==="Notes basses"?"bas":"haut",false)];
-      for(var mi=0;mi<made.length;mi++){
-        var madeSong=made[mi];
-        if(f.current.instruBlob||f.current.voixBlob){var mp3=f.current.instruBlob||f.current.voixBlob;
-          var spb=60/madeSong.bpm,mm=Math.ceil(madeSong.sections[0].to/madeSong.meter),anch=[];for(var x=0;x<=mm+1;x++)anch.push(x*madeSong.meter*spb);
-          try{await ee.add({id:madeSong.id,blob:mp3,anchors:anch,nudge:effectiveStart,shift:0,rate:1});}catch(e){}
-        }
-      }
-      setVars(function(a){return a.concat(made);});
-      setMsg("✓ "+made.length+" version"+(made.length>1?"s":"")+" prête"+(made.length>1?"s":"")+" : "+made.map(function(x){return x.register==="bas"?"notes basses":"notes hautes";}).join(" + ")+". Tu peux les écouter et les comparer directement.");
-    }catch(e){setMsg("\u2716 "+e.message);}
-    setBusy(false);
+  function loadVoice(ev){
+    var file=ev.target.files&&ev.target.files[0];ev.target.value="";if(!file)return;
+    try{if(files.current.voiceUrl)URL.revokeObjectURL(files.current.voiceUrl);}catch(e){}
+    files.current.voiceBlob=file;files.current.voiceUrl=URL.createObjectURL(file);
+    setNames(function(o){return Object.assign({},o,{voix:file.name});});
+    setMsg("Voix MP3 ajoutée. Elle est facultative à cette étape : le diagnostic porte d’abord sur le MIDI.");
   }
-  function stopPreview(){
-    var p=previewRef.current;
-    try{if(p.audio){p.audio.pause();p.audio.currentTime=0;}}catch(e){}
-    try{if(p.ctx)p.ctx.close();}catch(e){}
-    if(p.timer)clearTimeout(p.timer);
-    previewRef.current={ctx:null,audio:null,timer:null,id:null};setPreviewId(null);
+  function midiName(n){var a=["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"];n=Math.round(n);return a[((n%12)+12)%12]+(Math.floor(n/12)-1);}
+  function analyze(){
+    if(busy)return;setBusy(true);stopPlayback();setMsg("⏳ Lecture complète du MIDI et recherche de la ligne vocale…");
+    Promise.resolve().then(async function(){
+      if(files.current.midiLoading&&files.current.midiPromise)await files.current.midiPromise;
+      if(!files.current.midiAB)throw new Error("Ajoute d’abord le MIDI vocal.");
+      var exact=arrParseMidiMelodyExact(files.current.midiAB);
+      var tab=arrMelodyFromMidi(files.current.midiAB,false);
+      var notes=(tab.notes||[]).map(function(n){return {b:+n.b,d:+n.d,midi:+n.midi,s:n.s|0,f:n.f|0};});
+      if(!notes.length)throw new Error("Aucune note mélodique exploitable n’a été trouvée dans ce MIDI.");
+      var detected=Math.round(exact.bpm||tab.bpm||90),used=Math.max(30,Math.min(240,Number(manualBpm)||detected));
+      var meter=4,last=notes.reduce(function(m,n){return Math.max(m,n.b+n.d);},0);
+      var values=notes.map(function(n){return n.midi;});
+      var gaps=[];for(var i=1;i<notes.length;i++)gaps.push(Math.max(0,notes[i].b-(notes[i-1].b+notes[i-1].d)));
+      var grouped={};notes.forEach(function(n,idx){var m=Math.floor(n.b/meter)+1;(grouped[m]||(grouped[m]=[])).push(Object.assign({index:idx+1},n));});
+      var sig=notes.slice(0,40).map(function(n){return n.midi+"@"+n.b.toFixed(3)+"/"+n.d.toFixed(3);}).join("|");
+      setAnalysis({notes:notes,detectedBpm:detected,usedBpm:used,meter:meter,measures:Math.max(1,Math.ceil(last/meter)),durationBeats:last,durationSec:last*60/used,first:notes[0],last:notes[notes.length-1],min:Math.min.apply(null,values),max:Math.max.apply(null,values),sourceTrack:tab.sourceTrack,sourceChannel:tab.sourceChannel,trackChoices:tab.trackChoices||exact.trackChoices||[],groups:grouped,gaps:gaps,signature:sig});
+      setMsg("✓ Diagnostic terminé. Écoute la mélodie seule et vérifie les notes avant toute création d’accompagnement.");
+    }).catch(function(e){setAnalysis(null);setMsg("✖ "+(e.message||e));}).finally(function(){setBusy(false);});
   }
-  function previewSong(song){
-    if(previewId===song.id){stopPreview();return;}
-    stopPreview();
+  function stopPlayback(){
+    var p=playRef.current;try{if(p.audio){p.audio.pause();p.audio.currentTime=0;}}catch(e){}try{if(p.ctx)p.ctx.close();}catch(e){}if(p.timer)clearTimeout(p.timer);playRef.current={ctx:null,audio:null,timer:null};setPlaying(false);
+  }
+  function playMelody(withVoice){
+    if(!analysis)return;if(playing){stopPlayback();return;}
     try{
-      var AC=window.AudioContext||window.webkitAudioContext,ctx=new AC();
-      var srcBlob=f.current.instruBlob||f.current.voixBlob,audio=null;
-      if(srcBlob){audio=new Audio(URL.createObjectURL(srcBlob));audio.currentTime=0;audio.volume=.72;audio.play().catch(function(){});}
-      var spb=60/(song.bpm||90),offset=mode==="Mélodie vocale au ukulélé"?(song.vocalOffset||0):0,maxSec=45;
-      var open=[69,64,60,67];
-      (song.notes||[]).forEach(function(n){
-        var when=offset+(+n.b||0)*spb,dur=Math.max(.06,(+n.d||.25)*spb);
-        if(when>maxSec)return;
-        var midi=open[n.s|0]+(+n.f||0),freq=440*Math.pow(2,(midi-69)/12);
-        var osc=ctx.createOscillator(),gain=ctx.createGain(),flt=ctx.createBiquadFilter();
-        osc.type="triangle";osc.frequency.value=freq;flt.type="lowpass";flt.frequency.value=2200;
-        gain.gain.setValueAtTime(.0001,ctx.currentTime+when);
-        gain.gain.exponentialRampToValueAtTime(.16,ctx.currentTime+when+.012);
-        gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+when+Math.min(dur,.9));
-        osc.connect(flt);flt.connect(gain);gain.connect(ctx.destination);
-        osc.start(ctx.currentTime+when);osc.stop(ctx.currentTime+when+Math.min(dur,.95)+.03);
+      var AC=window.AudioContext||window.webkitAudioContext,ctx=new AC(),start=ctx.currentTime+.08,spb=60/analysis.usedBpm;
+      var audio=null;if(withVoice&&files.current.voiceUrl){audio=new Audio(files.current.voiceUrl);audio.currentTime=0;audio.volume=.60;audio.play().catch(function(){});}
+      analysis.notes.forEach(function(n){
+        var when=start+n.b*spb,dur=Math.max(.07,Math.min(1.5,n.d*spb));
+        var osc=ctx.createOscillator(),gain=ctx.createGain(),filter=ctx.createBiquadFilter();
+        osc.type="triangle";osc.frequency.value=440*Math.pow(2,(n.midi-69)/12);filter.type="lowpass";filter.frequency.value=2400;
+        gain.gain.setValueAtTime(.0001,when);gain.gain.exponentialRampToValueAtTime(.17,when+.012);gain.gain.exponentialRampToValueAtTime(.0001,when+dur);
+        osc.connect(filter);filter.connect(gain);gain.connect(ctx.destination);osc.start(when);osc.stop(when+dur+.03);
       });
-      var timer=setTimeout(stopPreview,maxSec*1000+300);
-      previewRef.current={ctx:ctx,audio:audio,timer:timer,id:song.id};setPreviewId(song.id);
-    }catch(e){setMsg("✖ Impossible de lire l’extrait : "+e.message);}
+      var total=Math.min(180,analysis.durationSec+.5),timer=setTimeout(stopPlayback,total*1000);playRef.current={ctx:ctx,audio:audio,timer:timer};setPlaying(true);
+    }catch(e){setMsg("✖ Lecture impossible : "+(e.message||e));}
   }
-  function keepSong(song){
-    onDone(song);
-    setVars(function(a){return a.map(function(v){return v.id===song.id?Object.assign({},v,{arrSaved:1}):v;});});
-    setMsg("✓ Morceau gardé dans Mes morceaux. Tu peux continuer à comparer les autres essais.");
-  }
-  function removeVariant(id){
-    if(previewId===id)stopPreview();
-    setVars(function(a){return a.filter(function(v){return v.id!==id;});});
-  }
-  function generer(){viRef.current+=1;genOne(viRef.current);}
-  function autre(){viRef.current+=1;genOne(viRef.current);}
-  var box={maxWidth:680,margin:"0 auto",padding:16};
-  var drop={border:"1px dashed #3a4658",borderRadius:12,padding:12,marginBottom:8,display:"block",cursor:"pointer",fontSize:14};
-  function chips(list,val,set){return (0,r.jsx)("div",{style:{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10},children:list.map(function(o){return (0,r.jsx)("button",{onClick:function(){set(o);},style:{border:"1px solid var(--bd2)",borderRadius:9,padding:"6px 11px",fontSize:13,fontWeight:700,cursor:"pointer",background:val===o?"#82ac32":"transparent",color:val===o?"#0c1205":"var(--tsoft)"},children:o},o);})});}
-  return (0,r.jsxs)("div",{style:box,children:[
-    (0,r.jsx)("button",{onClick:onBack,style:{marginBottom:12},children:"\u2190 Retour"}),
-    (0,r.jsx)("h2",{children:"\ud83c\udfbc Arrangeur IA"}),
-    (0,r.jsx)("p",{style:{color:"#aeb8c7"},children:"Importe tes fichiers, analyse le morceau une seule fois, puis crée plusieurs arrangements à partir de la même carte musicale. Accordage unique : High-G GCEA. Tous les arrangements sont générés dans leur version la plus travaillée."}),
-    (0,r.jsxs)("label",{style:drop,children:["\ud83c\udfa4 Voix (MP3) \u2014 ",names.voix||"aucun",(0,r.jsx)("input",{type:"file",accept:"audio/*",style:{display:"none"},onChange:load("voix",true)})]}),
-    voiceUrl?(0,r.jsxs)("div",{style:{border:"1px solid var(--bd2)",borderRadius:12,padding:10,marginBottom:10,background:"var(--c1)"},children:[
-      (0,r.jsx)("div",{style:{fontSize:12,fontWeight:700,marginBottom:7},children:"Synchroniser le début de la voix"}),
-      (0,r.jsx)("audio",{ref:voiceAudioRef,src:voiceUrl,controls:true,preload:"metadata",style:{width:"100%",marginBottom:8}}),
-      (0,r.jsx)("button",{type:"button",onClick:function(){var a=voiceAudioRef.current;if(a)setVocalOffset(Math.max(0,Math.round(a.currentTime*100)/100));},style:{background:"#5fd6a7",color:"#161a24",border:0,borderRadius:9,padding:"8px 12px",fontWeight:700,marginBottom:8},children:"\ud83d\udccd La voix commence ici"}),
-      (0,r.jsxs)("div",{style:{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"},children:[
-        [-.1,-.01,.01,.1].map(function(d){return (0,r.jsx)("button",{type:"button",onClick:function(){setVocalOffset(function(v){return Math.max(0,Math.round((v+d)*100)/100);});},style:{background:"transparent",color:"var(--tsoft)",border:"1px solid var(--bd2)",borderRadius:8,padding:"6px 8px",fontWeight:700},children:(d>0?"+":"")+d.toFixed(2)+" s"},d);}),
-        (0,r.jsxs)("span",{style:{fontSize:13,fontWeight:800,color:"#82ac32",marginLeft:4},children:["Début vocal : ",vocalOffset.toFixed(2)," s"]})
-      ]}),
-      (0,r.jsx)("div",{style:{fontSize:11,color:"var(--tmut)",marginTop:7,lineHeight:1.4},children:"En mode Introduction automatique, ce repère fixe le départ. Si tu choisis 1, 2 ou 4 mesures, ce nombre devient prioritaire. Le silence initial déjà contenu dans le MIDI est retiré pour éviter un double décalage."})
-    ]}):null,
-    (0,r.jsxs)("label",{style:drop,children:["\ud83c\udfb9 Instrumental (MP3) \u2014 ",names.instru||"aucun",(0,r.jsx)("input",{type:"file",accept:"audio/*",style:{display:"none"},onChange:load("instru",true)})]}),
-    (0,r.jsxs)("label",{style:drop,children:["\ud83c\udfbc MIDI vocal ou instrumental \u2014 ",names.midi||"aucun",(0,r.jsx)("input",{type:"file",style:{display:"none"},onChange:load("midi",false)})]}),
-    (0,r.jsxs)("label",{style:drop,children:["\ud83d\udcc4 MusicXML (option) \u2014 ",names.xml||"aucun",(0,r.jsx)("input",{type:"file",style:{display:"none"},onChange:load("xml",false)})]}),
-    (0,r.jsx)("div",{style:{display:"inline-block",background:"rgba(130,172,50,.15)",border:"1px solid #82ac32",color:"#82ac32",borderRadius:999,padding:"6px 10px",fontSize:12,fontWeight:800,margin:"2px 0 12px"},children:"Accordage verrouillé : High-G · GCEA"}),
-    (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Style"}),chips(STYLES,style,setStyle),
-    (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Mode de jeu"}),chips(MODES,mode,setMode),
-    mode==="Mélodie vocale au ukulélé"?(0,r.jsx)("div",{style:{fontSize:12,color:"#5fd6a7",margin:"-4px 0 10px",lineHeight:1.45},children:"Le MIDI vocal est retranscrit note par note. Le style ne remplace plus la mélodie."}):((mode==="Picking d’accompagnement"||mode==="Arpège d’accompagnement")&&!names.xml?(0,r.jsx)("div",{style:{fontSize:12,color:"#f2b34c",margin:"-4px 0 10px",lineHeight:1.45},children:"Pour un accompagnement fidèle, ajoute un MusicXML ou un MIDI contenant les accords. Un MIDI vocal seul ne suffit pas pour connaître l’harmonie."}):null),
-    (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"8px 0 2px"},children:"Hauteur des notes"}),chips(REGISTERS,register,setRegister),
-    (0,r.jsx)("div",{style:{fontSize:11,color:"var(--tmut)",margin:"-4px 0 10px",lineHeight:1.4},children:register==="Les deux versions"?"Chaque génération crée le même arrangement en deux versions : une plus grave et une plus aiguë, pour les comparer sans changer le motif.":(register==="Notes basses"?"Le moteur place les notes dans la zone la plus grave réellement disponible en High-G.":"Le moteur place les notes dans la partie haute du manche High-G tout en gardant les mêmes notes musicales et le même rythme.")}),
-    (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"8px 0 5px"},children:"Tempo du morceau (BPM)"}),
-    (0,r.jsxs)("div",{style:{display:"flex",alignItems:"center",gap:7,marginBottom:10,flexWrap:"wrap"},children:[
-      (0,r.jsx)("button",{type:"button",onClick:function(){setManualBpm(function(v){return Math.max(30,(Number(v)||90)-1);});},style:{background:"transparent",color:"var(--tsoft)",border:"1px solid var(--bd2)",borderRadius:9,padding:"8px 11px",fontWeight:800},children:"− 1"}),
-      (0,r.jsx)("input",{type:"number",min:30,max:240,step:1,value:manualBpm,onChange:function(e){var v=e.target.value;setManualBpm(v===""?"":Math.max(30,Math.min(240,parseInt(v,10)||30)));},onBlur:function(){setManualBpm(function(v){return Math.max(30,Math.min(240,Number(v)||90));});},style:{width:94,background:"var(--c1)",color:"var(--text)",border:"1px solid #82ac32",borderRadius:9,padding:"9px 10px",fontSize:16,fontWeight:900,textAlign:"center"}}),
-      (0,r.jsx)("button",{type:"button",onClick:function(){setManualBpm(function(v){return Math.min(240,(Number(v)||90)+1);});},style:{background:"transparent",color:"var(--tsoft)",border:"1px solid var(--bd2)",borderRadius:9,padding:"8px 11px",fontWeight:800},children:"+ 1"}),
-      (0,r.jsxs)("span",{style:{fontSize:12,color:"#82ac32",fontWeight:800},children:[manualBpm||90," BPM"]})
+  (0,E.useEffect)(function(){return function(){stopPlayback();try{if(files.current.voiceUrl)URL.revokeObjectURL(files.current.voiceUrl);}catch(e){}};},[]);
+  var drop={border:"1px dashed #3a4658",borderRadius:12,padding:13,marginBottom:9,display:"block",cursor:"pointer",fontSize:14};
+  var card={border:"1px solid var(--bd2)",borderRadius:12,padding:12,background:"var(--c1)"};
+  var noteRows=analysis?analysis.notes.slice(0,80):[];
+  return (0,r.jsxs)("div",{style:{maxWidth:760,margin:"0 auto",padding:"18px 14px 42px"},children:[
+    (0,r.jsx)("button",{onClick:onBack,style:{marginBottom:12},children:"← Retour"}),
+    (0,r.jsx)("h2",{children:"🔎 Étape 1 — Diagnostic du MIDI vocal"}),
+    (0,r.jsx)("p",{style:{color:"var(--tmut)",lineHeight:1.55},children:"Aucun accompagnement n’est créé ici. On vérifie seulement que Uke Studio sélectionne la bonne piste, garde le bon rythme et retranscrit une mélodie réellement différente pour chaque chanson. Accordage : High-G GCEA."}),
+    (0,r.jsxs)("label",{style:drop,children:["🎼 MIDI vocal — ",names.midi||"aucun fichier",(0,r.jsx)("input",{type:"file",accept:".mid,.midi,audio/midi,audio/x-midi",style:{display:"none"},onChange:loadMidi})]}),
+    (0,r.jsxs)("label",{style:drop,children:["🎤 Voix MP3 facultative — ",names.voix||"aucun fichier",(0,r.jsx)("input",{type:"file",accept:"audio/*",style:{display:"none"},onChange:loadVoice})]}),
+    (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"10px 0 5px"},children:"BPM utilisé pour l’écoute de contrôle"}),
+    (0,r.jsxs)("div",{style:{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap",marginBottom:12},children:[
+      (0,r.jsx)("button",{onClick:function(){setManualBpm(Math.max(30,manualBpm-1));invalidate("BPM modifié : relance l’analyse.");},children:"− 1"}),
+      (0,r.jsx)("input",{type:"number",min:30,max:240,value:manualBpm,onChange:function(e){setManualBpm(Math.max(30,Math.min(240,parseInt(e.target.value,10)||90)));invalidate("BPM modifié : relance l’analyse.");},style:{width:95,padding:"9px",borderRadius:9,border:"1px solid #82ac32",background:"var(--c1)",color:"var(--text)",fontWeight:900,textAlign:"center"}}),
+      (0,r.jsx)("button",{onClick:function(){setManualBpm(Math.min(240,manualBpm+1));invalidate("BPM modifié : relance l’analyse.");},children:"+ 1"}),
+      (0,r.jsx)("span",{style:{fontSize:12,color:"#82ac32",fontWeight:800},children:manualBpm+" BPM"})
     ]}),
-    (0,r.jsx)("div",{style:{fontSize:11,color:"var(--tmut)",margin:"-4px 0 10px",lineHeight:1.4},children:"Ce BPM est prioritaire sur celui détecté dans le MIDI ou proposé par l’IA. Il règle la vitesse des notes, la durée de chaque mesure, l’introduction et la préécoute."}),
-    (0,r.jsx)("div",{style:{fontSize:12,color:"var(--tmut)",margin:"6px 0 2px"},children:"Introduction"}),chips(INTROS,intro,setIntro),
-    msg?(0,r.jsx)("p",{style:{color:msg.indexOf("✖")===0?"#f47272":"#82ac32"},children:msg}):null,
-    (0,r.jsx)("button",{onClick:analyzeSong,disabled:analyzing||busy,style:{background:analysis?"transparent":"#5fd6a7",color:analysis?"#5fd6a7":"#10131c",border:analysis?"1px solid #5fd6a7":"none",borderRadius:11,padding:"12px 18px",fontWeight:800,marginRight:8,marginBottom:8},children:analyzing?"… Analyse en cours":(analysis?"↻ Refaire l’analyse":"🔎 Analyser le morceau")}),
-    analysis?(0,r.jsxs)("div",{style:{border:"1px solid var(--bd2)",borderRadius:12,padding:12,margin:"4px 0 12px",background:"var(--c1)"},children:[
-      (0,r.jsx)("div",{style:{fontWeight:900,marginBottom:8},children:"Carte musicale détectée"}),
-      (0,r.jsxs)("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(125px,1fr))",gap:7,fontSize:12},children:[
-        (0,r.jsxs)("div",{children:[(0,r.jsx)("b",{children:"Tempo détecté"}),(0,r.jsx)("div",{children:(analysis.bpmDetected||analysis.bpm||90)+" BPM"})]}),
-        (0,r.jsxs)("div",{children:[(0,r.jsx)("b",{children:"Mesures estimées"}),(0,r.jsx)("div",{children:analysis.measures||"—"})]}),
-        (0,r.jsxs)("div",{children:[(0,r.jsx)("b",{children:"Mélodie MIDI"}),(0,r.jsx)("div",{children:analysis.hasMelody?"détectée":"non détectée"})]}),
-        (0,r.jsxs)("div",{children:[(0,r.jsx)("b",{children:"Harmonie"}),(0,r.jsx)("div",{children:(analysis.chords&&analysis.chords.length)?analysis.chords.slice(0,6).join(" · "):"insuffisante"})]}),
-        (0,r.jsxs)("div",{children:[(0,r.jsx)("b",{children:"Piste vocale"}),(0,r.jsx)("div",{children:analysis.melodyTrack!=null?("piste "+analysis.melodyTrack+" · canal "+analysis.melodyChannel):"—"})]}),
-        (0,r.jsxs)("div",{children:[(0,r.jsx)("b",{children:"Empreinte"}),(0,r.jsx)("div",{children:analysis.songFingerprint||"—"})]})
+    (0,r.jsx)("button",{onClick:analyze,disabled:busy||!names.midi,style:{background:busy||!names.midi?"var(--bd2)":"#82ac32",color:busy||!names.midi?"var(--tmut)":"#0c1205",border:0,borderRadius:11,padding:"12px 18px",fontWeight:900},children:busy?"… Analyse en cours":"🔎 Analyser le MIDI vocal"}),
+    (0,r.jsx)("p",{style:{color:msg.indexOf("✖")===0?"#f47272":msg.indexOf("✓")===0?"#5fd6a7":"var(--tsoft)",lineHeight:1.5},children:msg}),
+    analysis?(0,r.jsxs)("div",{children:[
+      (0,r.jsxs)("div",{style:Object.assign({},card,{marginTop:12}),children:[
+        (0,r.jsx)("div",{style:{fontWeight:900,marginBottom:10},children:"Résultat de la détection"}),
+        (0,r.jsx)("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:9},children:[["Notes détectées",analysis.notes.length],["Piste choisie",analysis.sourceTrack!=null?"Piste "+analysis.sourceTrack:"—"],["Canal choisi",analysis.sourceChannel!=null?"Canal "+analysis.sourceChannel:"—"],["BPM MIDI",analysis.detectedBpm],["BPM d’écoute",analysis.usedBpm],["Durée",analysis.durationSec.toFixed(1)+" s"],["Mesures estimées",analysis.measures],["Étendue",midiName(analysis.min)+" → "+midiName(analysis.max)],["Première note",midiName(analysis.first.midi)],["Dernière note",midiName(analysis.last.midi)]].map(function(x){return (0,r.jsxs)("div",{style:{padding:"8px",borderRadius:9,background:"var(--c2)"},children:[(0,r.jsx)("div",{style:{fontSize:11,color:"var(--tmut)"},children:x[0]}),(0,r.jsx)("div",{style:{fontWeight:900,marginTop:2},children:String(x[1])})]},x[0]);})}),
+        (0,r.jsx)("div",{style:{fontSize:11,color:"var(--tmut)",marginTop:9,wordBreak:"break-all"},children:"Empreinte de contrôle : "+analysis.signature.slice(0,180)+(analysis.signature.length>180?"…":"")})
       ]}),
-      (0,r.jsx)("div",{style:{fontSize:11,color:"var(--tmut)",marginTop:8},children:"Cette analyse reste utilisée pour tous les essais jusqu’à ce que tu changes un fichier ou relances l’analyse."})
-    ]}):null,
-    (0,r.jsx)("button",{onClick:generer,disabled:busy||analyzing||!analysis,style:{background:analysis?"#82ac32":"var(--bd2)",color:analysis?"#0c1205":"var(--tmut)",border:0,borderRadius:11,padding:"12px 20px",fontWeight:700,marginRight:8,marginBottom:8},children:busy?"…":"✨ Créer un arrangement"}),
-    variants.length?(0,r.jsx)("button",{onClick:autre,disabled:busy||analyzing||!analysis,style:{background:"transparent",color:"var(--tsoft)",border:"1px solid var(--bd2)",borderRadius:11,padding:"12px 16px",fontWeight:700,marginBottom:8},children:"➕ Créer une autre variante"}):null,
-    variants.length?(0,r.jsxs)("div",{style:{marginTop:16},children:[
-      (0,r.jsxs)("div",{style:{fontSize:14,fontWeight:800,marginBottom:8},children:["Mes essais sur cette page (",variants.length,")"]}),
-      variants.map(function(sg,ix){return (0,r.jsxs)("div",{style:{border:sg.arrSaved?"1px solid #5fd6a7":"1px solid var(--bd2)",borderRadius:12,padding:"11px 12px",marginBottom:9,background:sg.arrSaved?"rgba(95,214,167,.06)":"var(--c1)"},children:[
-        (0,r.jsxs)("div",{style:{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:9},children:[
-          (0,r.jsxs)("div",{children:[(0,r.jsx)("div",{style:{fontWeight:800},children:sg.title}),(0,r.jsxs)("div",{style:{color:"var(--tmut)",fontSize:12,marginTop:2},children:[sg.artist.replace("🎼 ","")," · ",sg.bpm," BPM · ",sg.notes.length," notes",sg.register==="bas"?" · ↓ grave":" · ↑ aigu",sg.arrSaved?" · ✓ gardé":""]})]}),
-          (0,r.jsx)("button",{onClick:function(){removeVariant(sg.id);},style:{background:"transparent",color:"#f47272",border:"1px solid #f4727255",borderRadius:8,padding:"6px 9px",fontWeight:700,cursor:"pointer"},children:"🗑 Supprimer"})
-        ]}),
-        (0,r.jsxs)("div",{style:{display:"flex",gap:7,flexWrap:"wrap"},children:[
-          (0,r.jsx)("button",{onClick:function(){previewSong(sg);},style:{background:previewId===sg.id?"#f2b34c":"#82ac32",color:"#10131c",border:0,borderRadius:9,padding:"8px 12px",fontWeight:800,cursor:"pointer"},children:previewId===sg.id?"■ Arrêter l’extrait":"▶ Écouter l’extrait"}),
-          (0,r.jsx)("button",{onClick:function(){keepSong(sg);},disabled:!!sg.arrSaved,style:{background:sg.arrSaved?"transparent":"#5fd6a7",color:sg.arrSaved?"#5fd6a7":"#161a24",border:sg.arrSaved?"1px solid #5fd6a7":"none",borderRadius:9,padding:"8px 12px",fontWeight:800,cursor:sg.arrSaved?"default":"pointer"},children:sg.arrSaved?"✓ Morceau gardé":"♡ Garder ce morceau"})
-        ]})
-      ]},sg.id);})
+      (0,r.jsxs)("div",{style:{display:"flex",gap:8,flexWrap:"wrap",margin:"12px 0"},children:[
+        (0,r.jsx)("button",{onClick:function(){playMelody(false);},style:{background:playing?"#f2b34c":"#82ac32",color:"#10131c",border:0,borderRadius:10,padding:"10px 14px",fontWeight:900},children:playing?"■ Arrêter":"▶ Écouter la mélodie détectée"}),
+        names.voix?(0,r.jsx)("button",{onClick:function(){playMelody(true);},disabled:playing,style:{border:"1px solid var(--bd2)",borderRadius:10,padding:"10px 14px",fontWeight:800},children:"▶ Comparer avec la voix MP3"}):null
+      ]}),
+      (0,r.jsxs)("div",{style:card,children:[
+        (0,r.jsx)("div",{style:{fontWeight:900,marginBottom:8},children:"Premières notes réellement lues"}),
+        (0,r.jsx)("div",{style:{fontSize:11,color:"var(--tmut)",marginBottom:8},children:"La liste est limitée aux 80 premières notes pour le diagnostic. Mesure et position sont calculées en 4/4."}),
+        (0,r.jsx)("div",{style:{overflowX:"auto"},children:(0,r.jsxs)("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:12},children:[
+          (0,r.jsx)("thead",{children:(0,r.jsxs)("tr",{children:["N°","Mesure","Temps","Note MIDI","Durée","Corde","Frette"].map(function(h){return (0,r.jsx)("th",{style:{textAlign:"left",padding:"7px 6px",borderBottom:"1px solid var(--bd2)",color:"var(--tmut)"},children:h},h);})})}),
+          (0,r.jsx)("tbody",{children:noteRows.map(function(n,i){return (0,r.jsxs)("tr",{children:[i+1,Math.floor(n.b/4)+1,(n.b%4+1).toFixed(3),midiName(n.midi)+" ("+n.midi+")",n.d.toFixed(3),["A","E","C","G"][n.s],n.f].map(function(v,j){return (0,r.jsx)("td",{style:{padding:"7px 6px",borderBottom:"1px solid var(--bd1)"},children:String(v)},j);})},i);})})
+        ]})})
+      ]}),
+      analysis.trackChoices&&analysis.trackChoices.length?(0,r.jsxs)("div",{style:Object.assign({},card,{marginTop:12}),children:[
+        (0,r.jsx)("div",{style:{fontWeight:900,marginBottom:7},children:"Candidats MIDI examinés"}),
+        (0,r.jsx)("pre",{style:{whiteSpace:"pre-wrap",fontSize:11,color:"var(--tsoft)",margin:0},children:JSON.stringify(analysis.trackChoices.slice(0,12),null,2)})
+      ]}):null,
+      (0,r.jsx)("div",{style:{marginTop:12,padding:12,borderRadius:12,border:"1px solid #82ac32",background:"rgba(130,172,50,.08)",fontSize:13,lineHeight:1.5},children:"Validation de l’étape 1 : teste au moins deux chansons. Elles doivent afficher des empreintes, des premières notes et des suites de notes différentes, et la mélodie jouée doit être reconnaissable. Tant que ce n’est pas vrai, on ne passe pas à l’accompagnement."})
     ]}):null
   ]});
 }
