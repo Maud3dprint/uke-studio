@@ -46,6 +46,199 @@ if (!window.storage) {
 </head>
 <body>
 <div id="root"></div>
+
+<!-- ===== UKE STUDIO CLOUD SYNC — Firebase Auth + Firestore ===== -->
+<style>
+#uke-cloud-button{position:fixed;right:12px;bottom:12px;z-index:2147483000;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:10px 14px;background:#242a38;color:#fff;font:700 13px system-ui,-apple-system,Segoe UI,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35);cursor:pointer;max-width:calc(100vw - 24px)}
+#uke-cloud-button[data-state="ok"]{background:#176b4d}#uke-cloud-button[data-state="busy"]{background:#76571c}#uke-cloud-button[data-state="error"]{background:#8c2f35}
+#uke-cloud-panel{position:fixed;inset:0;z-index:2147483001;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;padding:18px;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+#uke-cloud-panel.open{display:flex}#uke-cloud-card{width:min(430px,100%);background:#1c2130;color:#fff;border:1px solid rgba(255,255,255,.16);border-radius:20px;padding:20px;box-shadow:0 24px 70px rgba(0,0,0,.55)}
+#uke-cloud-card h2{margin:0 0 8px;font-size:23px}#uke-cloud-card p{margin:6px 0 16px;color:#c8cedd;font-size:13px;line-height:1.5}
+.uke-cloud-action{width:100%;border:0;border-radius:12px;padding:13px 14px;margin-top:9px;font-weight:800;font-size:14px;cursor:pointer}.uke-cloud-primary{background:linear-gradient(135deg,#f2b34c,#f2864c);color:#161a24}.uke-cloud-secondary{background:#30384b;color:#fff}.uke-cloud-danger{background:#5d2c32;color:#fff}
+#uke-cloud-user{font-size:13px;color:#dfe5f3;word-break:break-word;background:#252c3c;border-radius:12px;padding:11px;margin:10px 0}#uke-cloud-detail{font-size:12px;color:#aeb8cc;min-height:18px;margin-top:10px}
+</style>
+<div id="uke-cloud-panel" aria-hidden="true"><div id="uke-cloud-card">
+  <h2>☁️ Sauvegarde Uke Studio</h2>
+  <p>Tes chansons et réglages restent sur cet appareil et sont aussi synchronisés avec ton compte Google.</p>
+  <div id="uke-cloud-user">Non connecté</div>
+  <button id="uke-cloud-login" class="uke-cloud-action uke-cloud-primary">Continuer avec Google</button>
+  <button id="uke-cloud-sync" class="uke-cloud-action uke-cloud-secondary" style="display:none">Synchroniser maintenant</button>
+  <button id="uke-cloud-logout" class="uke-cloud-action uke-cloud-danger" style="display:none">Se déconnecter</button>
+  <button id="uke-cloud-close" class="uke-cloud-action uke-cloud-secondary">Fermer</button>
+  <div id="uke-cloud-detail"></div>
+</div></div>
+<button id="uke-cloud-button" type="button">☁️ Connexion</button>
+
+<script>
+(function(){
+  const btn = document.getElementById('uke-cloud-button');
+  const panel = document.getElementById('uke-cloud-panel');
+  const userBox = document.getElementById('uke-cloud-user');
+  const detail = document.getElementById('uke-cloud-detail');
+  const loginBtn = document.getElementById('uke-cloud-login');
+  const logoutBtn = document.getElementById('uke-cloud-logout');
+  const syncBtn = document.getElementById('uke-cloud-sync');
+  const closeBtn = document.getElementById('uke-cloud-close');
+
+  function openPanel(){ panel.classList.add('open'); panel.setAttribute('aria-hidden','false'); }
+  function closePanel(){ panel.classList.remove('open'); panel.setAttribute('aria-hidden','true'); }
+  btn.addEventListener('click',openPanel);
+  closeBtn.addEventListener('click',closePanel);
+  panel.addEventListener('click',function(e){ if(e.target===panel) closePanel(); });
+
+  /* Firebase Auth ne fonctionne pas depuis un fichier téléchargé content:// ou file://. */
+  if(location.protocol !== 'https:' && location.protocol !== 'http:'){
+    btn.textContent='☁️ À tester sur GitHub';
+    btn.dataset.state='';
+    userBox.textContent='Cette copie est ouverte depuis les téléchargements du téléphone.';
+    detail.textContent='La connexion Google fonctionne uniquement quand index.html est installé sur ton site GitHub Pages. L’application locale reste utilisable sans synchronisation.';
+    loginBtn.style.display='none';
+    syncBtn.style.display='none';
+    logoutBtn.style.display='none';
+    return;
+  }
+
+  function loadScript(src){
+    return new Promise(function(resolve,reject){
+      var s=document.createElement('script');
+      s.src=src; s.async=true; s.onload=resolve;
+      s.onerror=function(){reject(new Error('Impossible de charger Firebase'));};
+      document.head.appendChild(s);
+    });
+  }
+
+  Promise.resolve()
+    .then(function(){return loadScript('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js');})
+    .then(function(){return loadScript('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js');})
+    .then(function(){return loadScript('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js');})
+    .then(startCloud)
+    .catch(function(err){
+      console.error(err);
+      btn.textContent='⚠️ Cloud indisponible';
+      detail.textContent=err.message||String(err);
+    });
+
+  function startCloud(){
+    const firebaseConfig = {
+      apiKey: "AIzaSyD_cGyCLdPotFVXGshvrTkqWT5oQn5ORAc",
+      authDomain: "uke-studio-dd353.firebaseapp.com",
+      projectId: "uke-studio-dd353",
+      storageBucket: "uke-studio-dd353.firebasestorage.app",
+      messagingSenderId: "614086377261",
+      appId: "1:614086377261:web:00f97f6018b63d81951da4"
+    };
+
+    if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    const auth=firebase.auth();
+    const db=firebase.firestore();
+    const provider=new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({prompt:'select_account'});
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){});
+
+    let currentUser=null, applyingCloud=false;
+    const saveTimers=new Map();
+    const EXCLUDED_KEYS=new Set(['uke:apikey']);
+    const nativeSetItem=Storage.prototype.setItem;
+    const nativeRemoveItem=Storage.prototype.removeItem;
+
+    function isSyncableKey(key){return typeof key==='string'&&key.startsWith('uke:')&&!EXCLUDED_KEYS.has(key);}
+    function docIdForKey(key){
+      const bytes=new TextEncoder().encode(key);let binary='';
+      bytes.forEach(function(b){binary+=String.fromCharCode(b)});
+      return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+    }
+    function setStatus(label,state){btn.textContent=label;btn.dataset.state=state||'';detail.textContent=label.replace(/^☁️\s*/,'');}
+    function parseJSON(value){try{return JSON.parse(value)}catch(e){return null}}
+    function meaningful(value){return value!==null&&value!==undefined&&value!==''&&value!=='[]'&&value!=='{}'}
+    function signature(item){
+      if(!item||typeof item!=='object')return JSON.stringify(item);
+      if(item.id!=null)return'id:'+item.id;
+      if(item.title)return'title:'+String(item.title).toLowerCase()+'|'+JSON.stringify(item.notes||[]);
+      return JSON.stringify(item);
+    }
+    function mergeValues(key,localValue,cloudValue){
+      if(!meaningful(localValue))return cloudValue;
+      if(!meaningful(cloudValue))return localValue;
+      if(localValue===cloudValue)return localValue;
+      const l=parseJSON(localValue),c=parseJSON(cloudValue);
+      if(Array.isArray(l)&&Array.isArray(c)){
+        const map=new Map();c.forEach(function(x){map.set(signature(x),x)});l.forEach(function(x){map.set(signature(x),x)});
+        return JSON.stringify(Array.from(map.values()));
+      }
+      if(l&&c&&typeof l==='object'&&typeof c==='object'&&!Array.isArray(l)&&!Array.isArray(c))return JSON.stringify(Object.assign({},c,l));
+      return localValue;
+    }
+    async function writeCloud(key,value){
+      if(!currentUser||!isSyncableKey(key))return;
+      value=String(value==null?'':value);
+      if(new Blob([value]).size>900000)return;
+      await db.collection('users').doc(currentUser.uid).collection('ukeData').doc(docIdForKey(key)).set({
+        key:key,value:value,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),device:navigator.userAgent.slice(0,180)
+      },{merge:true});
+    }
+    function scheduleSave(key,value){
+      if(!currentUser||applyingCloud||!isSyncableKey(key))return;
+      clearTimeout(saveTimers.get(key));
+      saveTimers.set(key,setTimeout(function(){
+        setStatus('☁️ Sauvegarde…','busy');
+        writeCloud(key,value).then(function(){setStatus('☁️ Sauvegardé','ok')}).catch(function(err){console.error(err);setStatus('⚠️ Erreur cloud','error');detail.textContent=err.message||String(err)});
+      },1000));
+    }
+    async function removeCloud(key){
+      if(!currentUser||applyingCloud||!isSyncableKey(key))return;
+      try{await db.collection('users').doc(currentUser.uid).collection('ukeData').doc(docIdForKey(key)).delete()}catch(e){}
+    }
+
+    Storage.prototype.setItem=function(key,value){nativeSetItem.call(this,key,value);if(this===localStorage)scheduleSave(String(key),String(value));};
+    Storage.prototype.removeItem=function(key){nativeRemoveItem.call(this,key);if(this===localStorage)removeCloud(String(key));};
+    if(window.storage){
+      const oldSet=window.storage.set.bind(window.storage),oldDelete=window.storage.delete.bind(window.storage);
+      window.storage.set=async function(k,v){const r=await oldSet(k,v);scheduleSave(String(k),String(v));return r;};
+      window.storage.delete=async function(k){const r=await oldDelete(k);removeCloud(String(k));return r;};
+    }
+
+    async function syncAll(reloadAfter){
+      if(!currentUser)return;
+      setStatus('☁️ Synchronisation…','busy');
+      const snap=await db.collection('users').doc(currentUser.uid).collection('ukeData').get();
+      const cloud=new Map();snap.forEach(function(d){const x=d.data();if(x&&isSyncableKey(x.key))cloud.set(x.key,x.value)});
+      const keys=new Set(cloud.keys());for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(isSyncableKey(k))keys.add(k)}
+      applyingCloud=true;
+      try{
+        for(const key of keys){
+          const localValue=localStorage.getItem(key),cloudValue=cloud.has(key)?cloud.get(key):null;
+          const merged=mergeValues(key,localValue,cloudValue);
+          if(merged!==null&&merged!==undefined){nativeSetItem.call(localStorage,key,merged);if(merged!==cloudValue)await writeCloud(key,merged);}
+        }
+      }finally{applyingCloud=false;}
+      setStatus('☁️ Synchronisé','ok');detail.textContent='Tes données sont à jour sur ce compte.';
+      if(reloadAfter){sessionStorage.setItem('uke:cloud-reloaded:'+currentUser.uid,'1');setTimeout(function(){location.reload()},500);}
+    }
+
+    loginBtn.addEventListener('click',function(){
+      loginBtn.disabled=true;setStatus('☁️ Connexion…','busy');
+      auth.signInWithPopup(provider).catch(function(err){
+        if(err&&['auth/popup-blocked','auth/cancelled-popup-request','auth/operation-not-supported-in-this-environment'].indexOf(err.code)>=0)return auth.signInWithRedirect(provider);
+        throw err;
+      }).catch(function(err){setStatus('⚠️ Connexion impossible','error');detail.textContent=err.message||String(err)}).finally(function(){loginBtn.disabled=false});
+    });
+    logoutBtn.addEventListener('click',function(){auth.signOut()});
+    syncBtn.addEventListener('click',function(){syncAll(false).catch(function(err){setStatus('⚠️ Erreur cloud','error');detail.textContent=err.message||String(err)})});
+
+    auth.onAuthStateChanged(async function(user){
+      currentUser=user||null;
+      if(!user){userBox.textContent='Non connecté — les données restent seulement sur cet appareil.';loginBtn.style.display='block';logoutBtn.style.display='none';syncBtn.style.display='none';setStatus('☁️ Connexion','');return;}
+      userBox.textContent='Connecté : '+(user.displayName||user.email||'Compte Google')+(user.email?'\n'+user.email:'');userBox.style.whiteSpace='pre-line';
+      loginBtn.style.display='none';logoutBtn.style.display='block';syncBtn.style.display='block';
+      const flag='uke:cloud-reloaded:'+user.uid;
+      try{await syncAll(sessionStorage.getItem(flag)!=='1')}catch(err){console.error(err);setStatus('⚠️ Erreur cloud','error');detail.textContent=err.message||String(err)}
+    });
+    window.UkeCloud={sync:function(){return syncAll(false)},login:function(){return auth.signInWithPopup(provider)},logout:function(){return auth.signOut()}};
+  }
+})();
+</script>
+<!-- ===== FIN UKE STUDIO CLOUD SYNC ===== -->
+
 <script>
 (()=>{var ch=Object.create;var pd=Object.defineProperty;var uh=Object.getOwnPropertyDescriptor;var fh=Object.getOwnPropertyNames;var dh=Object.getPrototypeOf,mh=Object.prototype.hasOwnProperty;var xn=(t,e)=>()=>(e||t((e={exports:{}}).exports,e),e.exports);var bh=(t,e,n,a)=>{if(e&&typeof e=="object"||typeof e=="function")for(let l of fh(e))!mh.call(t,l)&&l!==n&&pd(t,l,{get:()=>e[l],enumerable:!(a=uh(e,l))||a.enumerable});return t};var vi=(t,e,n)=>(n=t!=null?ch(dh(t)):{},bh(e||!t||!t.__esModule?pd(n,"default",{value:t,enumerable:!0}):n,t));var wd=xn(St=>{"use strict";var Ys=Symbol.for("react.transitional.element"),ph=Symbol.for("react.portal"),hh=Symbol.for("react.fragment"),gh=Symbol.for("react.strict_mode"),yh=Symbol.for("react.profiler"),vh=Symbol.for("react.consumer"),xh=Symbol.for("react.context"),Sh=Symbol.for("react.forward_ref"),Mh=Symbol.for("react.suspense"),Ah=Symbol.for("react.memo"),xd=Symbol.for("react.lazy"),Ch=Symbol.for("react.activity"),hd=Symbol.iterator;function Eh(t){return t===null||typeof t!="object"?null:(t=hd&&t[hd]||t["@@iterator"],typeof t=="function"?t:null)}var Sd={isMounted:function(){return!1},enqueueForceUpdate:function(){},enqueueReplaceState:function(){},enqueueSetState:function(){}},Md=Object.assign,Ad={};function fl(t,e,n){this.props=t,this.context=e,this.refs=Ad,this.updater=n||Sd}fl.prototype.isReactComponent={};fl.prototype.setState=function(t,e){if(typeof t!="object"&&typeof t!="function"&&t!=null)throw Error("takes an object of state variables to update or a function which returns an object of state variables.");this.updater.enqueueSetState(this,t,e,"setState")};fl.prototype.forceUpdate=function(t){this.updater.enqueueForceUpdate(this,t,"forceUpdate")};function Cd(){}Cd.prototype=fl.prototype;function Vs(t,e,n){this.props=t,this.context=e,this.refs=Ad,this.updater=n||Sd}var Xs=Vs.prototype=new Cd;Xs.constructor=Vs;Md(Xs,fl.prototype);Xs.isPureReactComponent=!0;var gd=Array.isArray;function Ls(){}var Jt={H:null,A:null,T:null,S:null},Ed=Object.prototype.hasOwnProperty;function Qs(t,e,n){var a=n.ref;return{$$typeof:Ys,type:t,key:e,ref:a!==void 0?a:null,props:n}}function wh(t,e){return Qs(t.type,e,t.props)}function Fs(t){return typeof t=="object"&&t!==null&&t.$$typeof===Ys}function zh(t){var e={"=":"=0",":":"=2"};return"$"+t.replace(/[=:]/g,function(n){return e[n]})}var yd=/\/+/g;function Hs(t,e){return typeof t=="object"&&t!==null&&t.key!=null?zh(""+t.key):e.toString(36)}function kh(t){switch(t.status){case"fulfilled":return t.value;case"rejected":throw t.reason;default:switch(typeof t.status=="string"?t.then(Ls,Ls):(t.status="pending",t.then(function(e){t.status==="pending"&&(t.status="fulfilled",t.value=e)},function(e){t.status==="pending"&&(t.status="rejected",t.reason=e)})),t.status){case"fulfilled":return t.value;case"rejected":throw t.reason}}throw t}function ul(t,e,n,a,l){var i=typeof t;(i==="undefined"||i==="boolean")&&(t=null);var o=!1;if(t===null)o=!0;else switch(i){case"bigint":case"string":case"number":o=!0;break;case"object":switch(t.$$typeof){case Ys:case ph:o=!0;break;case xd:return o=t._init,ul(o(t._payload),e,n,a,l)}}if(o)return l=l(t),o=a===""?"."+Hs(t,0):a,gd(l)?(n="",o!=null&&(n=o.replace(yd,"$&/")+"/"),ul(l,e,n,"",function(d){return d})):l!=null&&(Fs(l)&&(l=wh(l,n+(l.key==null||t&&t.key===l.key?"":(""+l.key).replace(yd,"$&/")+"/")+o)),e.push(l)),1;o=0;var s=a===""?".":a+":";if(gd(t))for(var m=0;m<t.length;m++)a=t[m],i=s+Hs(a,m),o+=ul(a,e,n,i,l);else if(m=Eh(t),typeof m=="function")for(t=m.call(t),m=0;!(a=t.next()).done;)a=a.value,i=s+Hs(a,m++),o+=ul(a,e,n,i,l);else if(i==="object"){if(typeof t.then=="function")return ul(kh(t),e,n,a,l);throw e=String(t),Error("Objects are not valid as a React child (found: "+(e==="[object Object]"?"object with keys {"+Object.keys(t).join(", ")+"}":e)+"). If you meant to render a collection of children, use an array instead.")}return o}function Go(t,e,n){if(t==null)return t;var a=[],l=0;return ul(t,a,"","",function(i){return e.call(n,i,l++)}),a}function Th(t){if(t._status===-1){var e=t._result;e=e(),e.then(function(n){(t._status===0||t._status===-1)&&(t._status=1,t._result=n)},function(n){(t._status===0||t._status===-1)&&(t._status=2,t._result=n)}),t._status===-1&&(t._status=0,t._result=e)}if(t._status===1)return t._result.default;throw t._result}var vd=typeof reportError=="function"?reportError:function(t){if(typeof window=="object"&&typeof window.ErrorEvent=="function"){var e=new window.ErrorEvent("error",{bubbles:!0,cancelable:!0,message:typeof t=="object"&&t!==null&&typeof t.message=="string"?String(t.message):String(t),error:t});if(!window.dispatchEvent(e))return}else if(typeof process=="object"&&typeof process.emit=="function"){process.emit("uncaughtException",t);return}console.error(t)},Dh={map:Go,forEach:function(t,e,n){Go(t,function(){e.apply(this,arguments)},n)},count:function(t){var e=0;return Go(t,function(){e++}),e},toArray:function(t){return Go(t,function(e){return e})||[]},only:function(t){if(!Fs(t))throw Error("React.Children.only expected to receive a single React element child.");return t}};St.Activity=Ch;St.Children=Dh;St.Component=fl;St.Fragment=hh;St.Profiler=yh;St.PureComponent=Vs;St.StrictMode=gh;St.Suspense=Mh;St.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE=Jt;St.__COMPILER_RUNTIME={__proto__:null,c:function(t){return Jt.H.useMemoCache(t)}};St.cache=function(t){return function(){return t.apply(null,arguments)}};St.cacheSignal=function(){return null};St.cloneElement=function(t,e,n){if(t==null)throw Error("The argument must be a React element, but you passed "+t+".");var a=Md({},t.props),l=t.key;if(e!=null)for(i in e.key!==void 0&&(l=""+e.key),e)!Ed.call(e,i)||i==="key"||i==="__self"||i==="__source"||i==="ref"&&e.ref===void 0||(a[i]=e[i]);var i=arguments.length-2;if(i===1)a.children=n;else if(1<i){for(var o=Array(i),s=0;s<i;s++)o[s]=arguments[s+2];a.children=o}return Qs(t.type,l,a)};St.createContext=function(t){return t={$$typeof:xh,_currentValue:t,_currentValue2:t,_threadCount:0,Provider:null,Consumer:null},t.Provider=t,t.Consumer={$$typeof:vh,_context:t},t};St.createElement=function(t,e,n){var a,l={},i=null;if(e!=null)for(a in e.key!==void 0&&(i=""+e.key),e)Ed.call(e,a)&&a!=="key"&&a!=="__self"&&a!=="__source"&&(l[a]=e[a]);var o=arguments.length-2;if(o===1)l.children=n;else if(1<o){for(var s=Array(o),m=0;m<o;m++)s[m]=arguments[m+2];l.children=s}if(t&&t.defaultProps)for(a in o=t.defaultProps,o)l[a]===void 0&&(l[a]=o[a]);return Qs(t,i,l)};St.createRef=function(){return{current:null}};St.forwardRef=function(t){return{$$typeof:Sh,render:t}};St.isValidElement=Fs;St.lazy=function(t){return{$$typeof:xd,_payload:{_status:-1,_result:t},_init:Th}};St.memo=function(t,e){return{$$typeof:Ah,type:t,compare:e===void 0?null:e}};St.startTransition=function(t){var e=Jt.T,n={};Jt.T=n;try{var a=t(),l=Jt.S;l!==null&&l(n,a),typeof a=="object"&&a!==null&&typeof a.then=="function"&&a.then(Ls,vd)}catch(i){vd(i)}finally{e!==null&&n.types!==null&&(e.types=n.types),Jt.T=e}};St.unstable_useCacheRefresh=function(){return Jt.H.useCacheRefresh()};St.use=function(t){return Jt.H.use(t)};St.useActionState=function(t,e,n){return Jt.H.useActionState(t,e,n)};St.useCallback=function(t,e){return Jt.H.useCallback(t,e)};St.useContext=function(t){return Jt.H.useContext(t)};St.useDebugValue=function(){};St.useDeferredValue=function(t,e){return Jt.H.useDeferredValue(t,e)};St.useEffect=function(t,e){return Jt.H.useEffect(t,e)};St.useEffectEvent=function(t){return Jt.H.useEffectEvent(t)};St.useId=function(){return Jt.H.useId()};St.useImperativeHandle=function(t,e,n){return Jt.H.useImperativeHandle(t,e,n)};St.useInsertionEffect=function(t,e){return Jt.H.useInsertionEffect(t,e)};St.useLayoutEffect=function(t,e){return Jt.H.useLayoutEffect(t,e)};St.useMemo=function(t,e){return Jt.H.useMemo(t,e)};St.useOptimistic=function(t,e){return Jt.H.useOptimistic(t,e)};St.useReducer=function(t,e,n){return Jt.H.useReducer(t,e,n)};St.useRef=function(t){return Jt.H.useRef(t)};St.useState=function(t){return Jt.H.useState(t)};St.useSyncExternalStore=function(t,e,n){return Jt.H.useSyncExternalStore(t,e,n)};St.useTransition=function(){return Jt.H.useTransition()};St.version="19.2.5"});var xi=xn((bv,zd)=>{"use strict";zd.exports=wd()});var _d=xn(It=>{"use strict";function Ws(t,e){var n=t.length;t.push(e);t:for(;0<n;){var a=n-1>>>1,l=t[a];if(0<_o(l,e))t[a]=e,t[n]=l,n=a;else break t}}function Sn(t){return t.length===0?null:t[0]}function jo(t){if(t.length===0)return null;var e=t[0],n=t.pop();if(n!==e){t[0]=n;t:for(var a=0,l=t.length,i=l>>>1;a<i;){var o=2*(a+1)-1,s=t[o],m=o+1,d=t[m];if(0>_o(s,n))m<l&&0>_o(d,s)?(t[a]=d,t[m]=n,a=m):(t[a]=s,t[o]=n,a=o);else if(m<l&&0>_o(d,n))t[a]=d,t[m]=n,a=m;else break t}}return e}function _o(t,e){var n=t.sortIndex-e.sortIndex;return n!==0?n:t.id-e.id}It.unstable_now=void 0;typeof performance=="object"&&typeof performance.now=="function"?(kd=performance,It.unstable_now=function(){return kd.now()}):(Zs=Date,Td=Zs.now(),It.unstable_now=function(){return Zs.now()-Td});var kd,Zs,Td,Dn=[],ea=[],Rh=1,tn=null,we=3,$s=!1,Si=!1,Mi=!1,Is=!1,Od=typeof setTimeout=="function"?setTimeout:null,Ud=typeof clearTimeout=="function"?clearTimeout:null,Dd=typeof setImmediate<"u"?setImmediate:null;function qo(t){for(var e=Sn(ea);e!==null;){if(e.callback===null)jo(ea);else if(e.startTime<=t)jo(ea),e.sortIndex=e.expirationTime,Ws(Dn,e);else break;e=Sn(ea)}}function Ps(t){if(Mi=!1,qo(t),!Si)if(Sn(Dn)!==null)Si=!0,ml||(ml=!0,dl());else{var e=Sn(ea);e!==null&&tc(Ps,e.startTime-t)}}var ml=!1,Ai=-1,Bd=5,Nd=-1;function Gd(){return Is?!0:!(It.unstable_now()-Nd<Bd)}function Js(){if(Is=!1,ml){var t=It.unstable_now();Nd=t;var e=!0;try{t:{Si=!1,Mi&&(Mi=!1,Ud(Ai),Ai=-1),$s=!0;var n=we;try{e:{for(qo(t),tn=Sn(Dn);tn!==null&&!(tn.expirationTime>t&&Gd());){var a=tn.callback;if(typeof a=="function"){tn.callback=null,we=tn.priorityLevel;var l=a(tn.expirationTime<=t);if(t=It.unstable_now(),typeof l=="function"){tn.callback=l,qo(t),e=!0;break e}tn===Sn(Dn)&&jo(Dn),qo(t)}else jo(Dn);tn=Sn(Dn)}if(tn!==null)e=!0;else{var i=Sn(ea);i!==null&&tc(Ps,i.startTime-t),e=!1}}break t}finally{tn=null,we=n,$s=!1}e=void 0}}finally{e?dl():ml=!1}}}var dl;typeof Dd=="function"?dl=function(){Dd(Js)}:typeof MessageChannel<"u"?(Ks=new MessageChannel,Rd=Ks.port2,Ks.port1.onmessage=Js,dl=function(){Rd.postMessage(null)}):dl=function(){Od(Js,0)};var Ks,Rd;function tc(t,e){Ai=Od(function(){t(It.unstable_now())},e)}It.unstable_IdlePriority=5;It.unstable_ImmediatePriority=1;It.unstable_LowPriority=4;It.unstable_NormalPriority=3;It.unstable_Profiling=null;It.unstable_UserBlockingPriority=2;It.unstable_cancelCallback=function(t){t.callback=null};It.unstable_forceFrameRate=function(t){0>t||125<t?console.error("forceFrameRate takes a positive int between 0 and 125, forcing frame rates higher than 125 fps is not supported"):Bd=0<t?Math.floor(1e3/t):5};It.unstable_getCurrentPriorityLevel=function(){return we};It.unstable_next=function(t){switch(we){case 1:case 2:case 3:var e=3;break;default:e=we}var n=we;we=e;try{return t()}finally{we=n}};It.unstable_requestPaint=function(){Is=!0};It.unstable_runWithPriority=function(t,e){switch(t){case 1:case 2:case 3:case 4:case 5:break;default:t=3}var n=we;we=t;try{return e()}finally{we=n}};It.unstable_scheduleCallback=function(t,e,n){var a=It.unstable_now();switch(typeof n=="object"&&n!==null?(n=n.delay,n=typeof n=="number"&&0<n?a+n:a):n=a,t){case 1:var l=-1;break;case 2:l=250;break;case 5:l=1073741823;break;case 4:l=1e4;break;default:l=5e3}return l=n+l,t={id:Rh++,callback:e,priorityLevel:t,startTime:n,expirationTime:l,sortIndex:-1},n>a?(t.sortIndex=n,Ws(ea,t),Sn(Dn)===null&&t===Sn(ea)&&(Mi?(Ud(Ai),Ai=-1):Mi=!0,tc(Ps,n-a))):(t.sortIndex=l,Ws(Dn,t),Si||$s||(Si=!0,ml||(ml=!0,dl()))),t};It.unstable_shouldYield=Gd;It.unstable_wrapCallback=function(t){var e=we;return function(){var n=we;we=e;try{return t.apply(this,arguments)}finally{we=n}}}});var jd=xn((hv,qd)=>{"use strict";qd.exports=_d()});var Ld=xn(De=>{"use strict";var Oh=xi();function Hd(t){var e="https://react.dev/errors/"+t;if(1<arguments.length){e+="?args[]="+encodeURIComponent(arguments[1]);for(var n=2;n<arguments.length;n++)e+="&args[]="+encodeURIComponent(arguments[n])}return"Minified React error #"+t+"; visit "+e+" for the full message or use the non-minified dev environment for full errors and additional helpful warnings."}function na(){}var Te={d:{f:na,r:function(){throw Error(Hd(522))},D:na,C:na,L:na,m:na,X:na,S:na,M:na},p:0,findDOMNode:null},Uh=Symbol.for("react.portal");function Bh(t,e,n){var a=3<arguments.length&&arguments[3]!==void 0?arguments[3]:null;return{$$typeof:Uh,key:a==null?null:""+a,children:t,containerInfo:e,implementation:n}}var Ci=Oh.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;function Ho(t,e){if(t==="font")return"";if(typeof e=="string")return e==="use-credentials"?e:""}De.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE=Te;De.createPortal=function(t,e){var n=2<arguments.length&&arguments[2]!==void 0?arguments[2]:null;if(!e||e.nodeType!==1&&e.nodeType!==9&&e.nodeType!==11)throw Error(Hd(299));return Bh(t,e,null,n)};De.flushSync=function(t){var e=Ci.T,n=Te.p;try{if(Ci.T=null,Te.p=2,t)return t()}finally{Ci.T=e,Te.p=n,Te.d.f()}};De.preconnect=function(t,e){typeof t=="string"&&(e?(e=e.crossOrigin,e=typeof e=="string"?e==="use-credentials"?e:"":void 0):e=null,Te.d.C(t,e))};De.prefetchDNS=function(t){typeof t=="string"&&Te.d.D(t)};De.preinit=function(t,e){if(typeof t=="string"&&e&&typeof e.as=="string"){var n=e.as,a=Ho(n,e.crossOrigin),l=typeof e.integrity=="string"?e.integrity:void 0,i=typeof e.fetchPriority=="string"?e.fetchPriority:void 0;n==="style"?Te.d.S(t,typeof e.precedence=="string"?e.precedence:void 0,{crossOrigin:a,integrity:l,fetchPriority:i}):n==="script"&&Te.d.X(t,{crossOrigin:a,integrity:l,fetchPriority:i,nonce:typeof e.nonce=="string"?e.nonce:void 0})}};De.preinitModule=function(t,e){if(typeof t=="string")if(typeof e=="object"&&e!==null){if(e.as==null||e.as==="script"){var n=Ho(e.as,e.crossOrigin);Te.d.M(t,{crossOrigin:n,integrity:typeof e.integrity=="string"?e.integrity:void 0,nonce:typeof e.nonce=="string"?e.nonce:void 0})}}else e==null&&Te.d.M(t)};De.preload=function(t,e){if(typeof t=="string"&&typeof e=="object"&&e!==null&&typeof e.as=="string"){var n=e.as,a=Ho(n,e.crossOrigin);Te.d.L(t,n,{crossOrigin:a,integrity:typeof e.integrity=="string"?e.integrity:void 0,nonce:typeof e.nonce=="string"?e.nonce:void 0,type:typeof e.type=="string"?e.type:void 0,fetchPriority:typeof e.fetchPriority=="string"?e.fetchPriority:void 0,referrerPolicy:typeof e.referrerPolicy=="string"?e.referrerPolicy:void 0,imageSrcSet:typeof e.imageSrcSet=="string"?e.imageSrcSet:void 0,imageSizes:typeof e.imageSizes=="string"?e.imageSizes:void 0,media:typeof e.media=="string"?e.media:void 0})}};De.preloadModule=function(t,e){if(typeof t=="string")if(e){var n=Ho(e.as,e.crossOrigin);Te.d.m(t,{as:typeof e.as=="string"&&e.as!=="script"?e.as:void 0,crossOrigin:n,integrity:typeof e.integrity=="string"?e.integrity:void 0})}else Te.d.m(t)};De.requestFormReset=function(t){Te.d.r(t)};De.unstable_batchedUpdates=function(t,e){return t(e)};De.useFormState=function(t,e,n){return Ci.H.useFormState(t,e,n)};De.useFormStatus=function(){return Ci.H.useHostTransitionStatus()};De.version="19.2.5"});var Xd=xn((yv,Vd)=>{"use strict";function Yd(){if(!(typeof __REACT_DEVTOOLS_GLOBAL_HOOK__>"u"||typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE!="function"))try{__REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE(Yd)}catch(t){console.error(t)}}Yd(),Vd.exports=Ld()});var np=xn(fs=>{"use strict";var be=jd(),h1=xi(),Nh=Xd();function tt(t){var e="https://react.dev/errors/"+t;if(1<arguments.length){e+="?args[]="+encodeURIComponent(arguments[1]);for(var n=2;n<arguments.length;n++)e+="&args[]="+encodeURIComponent(arguments[n])}return"Minified React error #"+t+"; visit "+e+" for the full message or use the non-minified dev environment for full errors and additional helpful warnings."}function g1(t){return!(!t||t.nodeType!==1&&t.nodeType!==9&&t.nodeType!==11)}function uo(t){var e=t,n=t;if(t.alternate)for(;e.return;)e=e.return;else{t=e;do e=t,(e.flags&4098)!==0&&(n=e.return),t=e.return;while(t)}return e.tag===3?n:null}function y1(t){if(t.tag===13){var e=t.memoizedState;if(e===null&&(t=t.alternate,t!==null&&(e=t.memoizedState)),e!==null)return e.dehydrated}return null}function v1(t){if(t.tag===31){var e=t.memoizedState;if(e===null&&(t=t.alternate,t!==null&&(e=t.memoizedState)),e!==null)return e.dehydrated}return null}function Qd(t){if(uo(t)!==t)throw Error(tt(188))}function Gh(t){var e=t.alternate;if(!e){if(e=uo(t),e===null)throw Error(tt(188));return e!==t?null:t}for(var n=t,a=e;;){var l=n.return;if(l===null)break;var i=l.alternate;if(i===null){if(a=l.return,a!==null){n=a;continue}break}if(l.child===i.child){for(i=l.child;i;){if(i===n)return Qd(l),t;if(i===a)return Qd(l),e;i=i.sibling}throw Error(tt(188))}if(n.return!==a.return)n=l,a=i;else{for(var o=!1,s=l.child;s;){if(s===n){o=!0,n=l,a=i;break}if(s===a){o=!0,a=l,n=i;break}s=s.sibling}if(!o){for(s=i.child;s;){if(s===n){o=!0,n=i,a=l;break}if(s===a){o=!0,a=i,n=l;break}s=s.sibling}if(!o)throw Error(tt(189))}}if(n.alternate!==a)throw Error(tt(190))}if(n.tag!==3)throw Error(tt(188));return n.stateNode.current===n?t:e}function x1(t){var e=t.tag;if(e===5||e===26||e===27||e===6)return t;for(t=t.child;t!==null;){if(e=x1(t),e!==null)return e;t=t.sibling}return null}var $t=Object.assign,_h=Symbol.for("react.element"),Lo=Symbol.for("react.transitional.element"),Oi=Symbol.for("react.portal"),vl=Symbol.for("react.fragment"),S1=Symbol.for("react.strict_mode"),Bc=Symbol.for("react.profiler"),M1=Symbol.for("react.consumer"),qn=Symbol.for("react.context"),Tu=Symbol.for("react.forward_ref"),Nc=Symbol.for("react.suspense"),Gc=Symbol.for("react.suspense_list"),Du=Symbol.for("react.memo"),aa=Symbol.for("react.lazy"),_c=Symbol.for("react.activity"),qh=Symbol.for("react.memo_cache_sentinel"),Fd=Symbol.iterator;function Ei(t){return t===null||typeof t!="object"?null:(t=Fd&&t[Fd]||t["@@iterator"],typeof t=="function"?t:null)}var jh=Symbol.for("react.client.reference");function qc(t){if(t==null)return null;if(typeof t=="function")return t.$$typeof===jh?null:t.displayName||t.name||null;if(typeof t=="string")return t;switch(t){case vl:return"Fragment";case Bc:return"Profiler";case S1:return"StrictMode";case Nc:return"Suspense";case Gc:return"SuspenseList";case _c:return"Activity"}if(typeof t=="object")switch(t.$$typeof){case Oi:return"Portal";case qn:return t.displayName||"Context";case M1:return(t._context.displayName||"Context")+".Consumer";case Tu:var e=t.render;return t=t.displayName,t||(t=e.displayName||e.name||"",t=t!==""?"ForwardRef("+t+")":"ForwardRef"),t;case Du:return e=t.displayName||null,e!==null?e:qc(t.type)||"Memo";case aa:e=t._payload,t=t._init;try{return qc(t(e))}catch{}}return null}var Ui=Array.isArray,vt=h1.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE,_t=Nh.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE,Ya={pending:!1,data:null,method:null,action:null},jc=[],xl=-1;function wn(t){return{current:t}}function ge(t){0>xl||(t.current=jc[xl],jc[xl]=null,xl--)}function Zt(t,e){xl++,jc[xl]=t.current,t.current=e}var En=wn(null),Wi=wn(null),ba=wn(null),xr=wn(null);function Sr(t,e){switch(Zt(ba,e),Zt(Wi,t),Zt(En,null),e.nodeType){case 9:case 11:t=(t=e.documentElement)&&(t=t.namespaceURI)?P0(t):0;break;default:if(t=e.tagName,e=e.namespaceURI)e=P0(e),t=Yb(e,t);else switch(t){case"svg":t=1;break;case"math":t=2;break;default:t=0}}ge(En),Zt(En,t)}function ql(){ge(En),ge(Wi),ge(ba)}function Hc(t){t.memoizedState!==null&&Zt(xr,t);var e=En.current,n=Yb(e,t.type);e!==n&&(Zt(Wi,t),Zt(En,n))}function Mr(t){Wi.current===t&&(ge(En),ge(Wi)),xr.current===t&&(ge(xr),ro._currentValue=Ya)}var ec,Zd;function qa(t){if(ec===void 0)try{throw Error()}catch(n){var e=n.stack.trim().match(/\n( *(at )?)/);ec=e&&e[1]||"",Zd=-1<n.stack.indexOf(`
     at`)?" (<anonymous>)":-1<n.stack.indexOf("@")?"@unknown:0:0":""}return`
