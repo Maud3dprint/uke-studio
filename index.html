@@ -5467,40 +5467,50 @@ let ukDevPick=async(id)=>{
   try{if(v2)localStorage.setItem("uke:micdev",String(v2));else localStorage.removeItem("uke:micdev")}catch(e){}
   if(oi){try{Bs()}catch(e){}setTimeout(()=>{try{$p()}catch(e){}},120)}
 };
-ed.current=Os,nd.current=Us,ad.current=(h,onsetB,ukFresh)=>{
+ed.current=Os,nd.current=Us,ad.current=(h,onsetB,ukFresh,ukWin,ukStrong)=>{
   if(!c)return;
   let HS=Array.isArray(h)?h:[h],h0=HS[0];
   if(!HS.length)HS=[NaN];
   let U=onsetB!=null?onsetB:q.current,k=ot.current;
   k.judged||(k.judged=new Set);
-  let ukC=[];
+  /* deux fenetres : ukW = credit STRICT (l'attaque doit tomber dessus,
+     ±0,2 s par defaut) ; 0,75 temps = contexte du message. Une note
+     soutenue ou un fond ne peuvent ainsi plus valider une note voisine
+     dont l'attaque n'a pas eu lieu. */
+  let ukW=(ukWin&&ukWin>0)?ukWin:.4;
+  let ukNear=[],ukC=[];
   b.forEach((ut,At)=>{
     if(ut.type!=="note"||ut.bg||ut.voice||ut.b<0||k.judged.has(At)||k.miss.has(At))return;
     let gt=Math.abs(ut.b-U);
-    if(gt<.6)ukC.push({i:At,e:ut,dt:gt});
+    if(gt<.75)ukC.push({i:At,e:ut,dt:gt});
+    if(gt<ukW)ukNear.push({i:At,e:ut,dt:gt});
   });
   ukC.sort((z1,z2)=>z1.dt-z2.dt);
-  /* meilleure correspondance note/candidat (ecart en cents, octave ±1 toleree) */
-  let best=-1,be=null,bcen=1e9;
-  for(let z=0;z<ukC.length;z++){
-    let hz=zf(ukC[z].e.s,ukC[z].e.f);
+  ukNear.sort((z1,z2)=>z1.dt-z2.dt);
+  /* recentrage auto : on compare contre la hauteur attendue DECALEE de
+     l'ecart d'accordage moyen recent (une corde un peu fausse ne fait
+     plus rater les notes justes). */
+  let ko=Math.max(-60,Math.min(60,k.off||0));
+  /* meilleure correspondance note/candidat (ecart en cents, octave ±1) */
+  let best=-1,be=null,bcen=1e9,bcf=0;
+  for(let z=0;z<ukNear.length;z++){
+    let hz=zf(ukNear[z].e.s,ukNear[z].e.f)*Math.pow(2,ko/1200);
     for(let y2=0;y2<HS.length;y2++){
       let pz=1200*Math.log2(HS[y2]/hz);
       let dd=Math.min(Math.abs(pz),Math.abs(pz-1200),Math.abs(pz+1200));
-      if(dd<bcen){bcen=dd;best=ukC[z].i;be=ukC[z].e;}
+      if(dd<bcen){bcen=dd;best=ukNear[z].i;be=ukNear[z].e;bcf=HS[y2];}
     }
   }
-  /* secours spectral : accord / fondamentale faible — on regarde ou est
-     l'energie du spectre reel plutot que de conclure a la faute */
+  /* vote spectral : les hauteurs attendues sont-elles dans le spectre ? */
   let spVotes=0,sp=null,spBest=0,spF=0,masks=[];
   let fr=null,sr9=48000;
   try{fr=window.ukLastFrame;sr9=window.ukLastSr||48000}catch(e){}
-  if(ukC.length&&fr){
-    for(let z3=0;z3<ukC.length;z3++)masks.push(zf(ukC[z3].e.s,ukC[z3].e.f));
-    for(let z2=0;z2<ukC.length;z2++){
+  if(ukNear.length&&fr){
+    for(let z3=0;z3<ukNear.length;z3++)masks.push(zf(ukC[z3].e.s,ukC[z3].e.f));
+    for(let z2=0;z2<ukNear.length;z2++){
       try{
-        let sc=ukSpecScore(fr,sr9,zf(ukC[z2].e.s,ukC[z2].e.f),masks);
-        if(sc>0){spVotes++;if(sc>spBest){spBest=sc;sp=ukC[z2];spF=zf(ukC[z2].e.s,ukC[z2].e.f);}}
+        let sc=ukSpecScore(fr,sr9,zf(ukNear[z2].e.s,ukNear[z2].e.f),masks,ko);
+        if(sc>0){spVotes++;if(sc>spBest){spBest=sc;sp=ukNear[z2];spF=zf(ukNear[z2].e.s,ukNear[z2].e.f);}}
       }catch(e){}
     }
   }
@@ -5508,7 +5518,7 @@ ed.current=Os,nd.current=Us,ad.current=(h,onsetB,ukFresh)=>{
      entend. Un fond (musique de l'app diffusee, accord de fond) contient
      parfois la hauteur attendue mais faiblement (~0.05) ; un vrai jeu de
      ukulele au premier plan depasse ~0.09. Reglable via uke:pkmn. */
-  let pkMin=.07;
+  let pkMin=.055;
   try{var pkU=parseFloat(localStorage.getItem("uke:pkmn"));if(pkU>0)pkMin=pkU}catch(e){}
   let pkT=0,pkN=0;
   try{
@@ -5522,7 +5532,7 @@ ed.current=Os,nd.current=Us,ad.current=(h,onsetB,ukFresh)=>{
      d'accord peut donner la bonne periode sans que le ukulele joue. */
   let pkChord=pkMin*.55;
   let gHit=(best>=0&&bcen<=75&&pkT>=pkMin)?1:
-    (sp&&(spVotes>=2?pkN>=pkChord:(spVotes===1&&ukC.length===1&&spBest>=6&&pkN>=pkMin)))?2:0;
+    (sp&&(spVotes>=2?pkN>=pkChord:(spVotes===1&&ukNear.length===1&&spBest>=3.5&&pkN>=pkMin)))?2:0;
   let at=()=>{
     /* pas d'attaque neuve : le son entendu est le fond (musique, salle),
        on reste muet — c'est la cause n1 des "fausses notes" a tort. */
@@ -5538,10 +5548,14 @@ ed.current=Os,nd.current=Us,ad.current=(h,onsetB,ukFresh)=>{
         let g2=Math.abs(ut.b-U);
         if(g2<1.4&&(!wide||g2<wide.dt))wide={e:ut,dt:g2};
       });
-      if(wide&&h0&&!Ie)Os({t:"D\u00E9tect\u00E9 "+ukNoteName(h0)+" \u2014 note "+(wide.dt>.6?"hors tempo":"trop t\xF4t/tard"),col:"#f2b34c"});
+      if(wide&&h0&&!Ie&&ukStrong)Os({t:"D\u00E9tect\u00E9 "+ukNoteName(h0)+" \u2014 note "+(wide.dt>.6?"hors tempo":"trop t\xF4t/tard"),col:"#f2b34c"});
       return;
     }
-    let det=(h0&&isFinite(h0)&&h0>=240&&h0<=1800)?ukNoteName(h0):"autre note",tgt=ukC[0].e,tnm=ukNoteName(zf(tgt.s,tgt.f));
+    /* n'accuser que si la note attendue est DANS la fenetre stricte :
+       une note voisine (0,75 temps mais hors fenetre) n'est pas une faute. */
+    let tgt=ukNear&&ukNear.length?ukNear[0].e:null;
+    if(!tgt)return;
+    let det=(h0&&isFinite(h0)&&h0>=240&&h0<=1800)?ukNoteName(h0):"autre note",tnm=ukNoteName(zf(tgt.s,tgt.f));
     let ut2=-1,At2=99,hh=h0||0;
     for(let gt2=0;gt2<4;gt2++)for(let qt of[hh,hh*2,hh/2]){
       let Ct2=Math.round(12*Math.log2(qt/Wn[gt2].open));
@@ -5552,8 +5566,10 @@ ed.current=Os,nd.current=Us,ad.current=(h,onsetB,ukFresh)=>{
   };
   if(!gHit){
     /* la note attendue est dans l'air mais ne domine pas : fond de piste,
-       musique de l'app diffusee — on ne credite pas ET on ne punit pas. */
-    if(spVotes>=1)return;
+       musique de l'app diffusee — on ne credite pas ET on ne punit pas.
+       Un onset "rupture de hauteur" (pas une vraie attaque) ne punit
+       jamais non plus : le jeu doux ne doit pas devenir une faute. */
+    if(spVotes>=1||!ukC.length||!ukStrong)return;
     at();return
   }
   /* pas d'attaque neuve dans le micro : ce qu'on entend est vraisemblablement
@@ -5562,14 +5578,14 @@ ed.current=Os,nd.current=Us,ad.current=(h,onsetB,ukFresh)=>{
   if(!ukFresh)return;
   let j=gHit===1?best:sp.i,et=gHit===1?be:sp.e;
   k.judged.add(j),k.hit.add(j),k.miss.delete(j),k.streak=0,k.streakStart=null,
-  b.forEach((Ct,Nt)=>{Nt!==j&&Ct.type==="note"&&!Ct.bg&&!Ct.voice&&Math.abs(Ct.b-et.b)<.08&&!k.hit.has(Nt)&&(k.hit.add(Nt),k.judged.add(Nt),w(zt=>zt+1),C(zt=>zt+10))});
+  b.forEach((Ct,Nt)=>{Nt!==j&&Ct.type==="note"&&!Ct.bg&&!Ct.voice&&Math.abs(Ct.b-et.b)<.08&&!k.hit.has(Nt)&&spVotes>=2&&(k.hit.add(Nt),k.judged.add(Nt),w(zt=>zt+1),C(zt=>zt+10))});
   let ut=nt.current+1;nt.current=ut,A(ut);
   let gt=10*(ut>=20?4:ut>=10?3:ut>=5?2:1)*n;
   C(Ct=>Ct+gt),w(Ct=>Ct+1),P({txt:`+${gt}`,id:Math.random()});
   let qt=U-et.b;
   Os(qt<-.3?{t:"Trop t\xF4t",col:"#f2b34c"}:qt>.3?{t:"Trop tard",col:"#f2b34c"}:{t:"Bien \u2713",col:"#5fd6a7"}),
   Us(et.s,!0)
-};let Bs=(0,E.useCallback)(()=>{let h=Ds.current;h&&(cancelAnimationFrame(h.raf),h.stream.getTracks().forEach(U=>U.stop()),Ds.current=null,Rs.current=[],Xf(!1))},[]),$p=(0,E.useCallback)(async()=>{try{let h=await ukGetMicStream(),U=dt(),k=U.createMediaStreamSource(h),j=U.createAnalyser();j.fftSize=2048,k.connect(j);let O=new Float32Array(j.fftSize),at={stream:h,an:j,data:O,raf:0};Ds.current=at,Xf(!0);let et=0,ukNF=.012,ukLd=!1,ukRS=0,ukDC=0,ukPrev=0,ht=()=>{
+};let Bs=(0,E.useCallback)(()=>{let h=Ds.current;h&&(cancelAnimationFrame(h.raf),h.stream.getTracks().forEach(U=>U.stop()),Ds.current=null,Rs.current=[],Xf(!1))},[]),$p=(0,E.useCallback)(async()=>{try{let h=await ukGetMicStream(),U=dt(),k=U.createMediaStreamSource(h),j=U.createAnalyser();j.fftSize=2048,k.connect(j);let O=new Float32Array(j.fftSize),at={stream:h,an:j,data:O,raf:0};Ds.current=at,Xf(!0);let et=0,ukNF=.012,ukLd=!1,ukRS=0,ukDC=0,ukPrev=0,ukPrevC=null,ht=()=>{
   if(at.raf=requestAnimationFrame(ht),et++%2!==0)return;
   j.getFloatTimeDomainData(O);
   let pt=0;
@@ -5591,9 +5607,19 @@ ed.current=Os,nd.current=Us,ad.current=(h,onsetB,ukFresh)=>{
   let Ct=Rs.current;
   if(Ct.push(ukCd),Ct.length>5)Ct.shift();
   if(++ukRS<2)return;
-  let ukFresh=ukRS<=6||pt>ukPrev*1.25;
-  ukPrev=pt;
-  ad.current(Ct.length>1?Ct[Ct.length-2].concat(Ct[Ct.length-1]):Ct[Ct.length-1],q.current,ukFresh);
+  /* DETECTION D'ATTAQUE : on ne juge que quand une attaque fraiche est
+     entendue (debut d'emission, pic d'energie, ou rupture de hauteur pour
+     le jeu doux). Le ring d'une note precedente ne declenche jamais de
+     jugement : plus de "trop tot", plus de "fausse note" sur la note
+     suivante, plus d'accusations sur le fond de piste. */
+  let ukOns=ukRS<=5||pt>ukPrev*1.25,ukStrong=!0;
+  if(!ukOns&&ukPrevC){
+    let du=1200*Math.log2(Math.max(1e-6,ukCd[0]||1)/Math.max(1e-6,ukPrevC[0]||1));
+    if(Math.abs(du)>85){ukOns=!0;ukStrong=!1}
+  }
+  ukPrev=pt;ukPrevC=ukCd;
+  if(!ukOns)return;
+  ad.current(Ct.length>1?Ct[Ct.length-2].concat(Ct[Ct.length-1]):Ct[Ct.length-1],q.current,!0,.4,ukStrong);
 };ht()}catch(h){alert("Micro indisponible : "+h.message)}},[]);(0,E.useEffect)(()=>()=>{Bs()},[Bs]);(0,E.useEffect)(()=>{try{$p()}catch(eUk){}},[]);let Ip=()=>{if(!c||ko.current)return;let h=q.current,U=ot.current,k=-1,j=.42;if(b.forEach((O,at)=>{if(O.bg||O.voice||U.hit.has(at)||U.miss.has(at)||O.b<0)return;let et=Math.abs(O.b-h);et<j&&(j=et,k=at)}),k>=0){U.hit.add(k),U.streak=0,U.streakStart=null;let O=nt.current+1;nt.current=O,A(O);let et=10*(O>=20?4:O>=10?3:O>=5?2:1)*n;C(ht=>ht+et),w(ht=>ht+1),P({txt:`+${et}`,id:Math.random()})}},fi=()=>{clearInterval(V.current),B(null),ot.current={played:new Set,hit:new Set,miss:new Set,streak:0,streakStart:null},nt.current=0,A(0),C(0),w(0),K(!1),q.current=-4,g(-4);let h=le.current;h&&h.ready&&(h.audio.pause(),h.audio.currentTime=0)},[di,Pp]=(0,E.useState)(!1),ld=(0,E.useRef)(!1);ld.current=di;let id=(0,E.useRef)(()=>{});id.current=fi;let Ns=c?b.find(h=>!h.bg&&!(h.type==="note"&&h.voice)&&h.b>f+.5):null,th=60/(Math.max(30,d.bpm+Y)*y*D),od=Ns?(Ns.b-f)*th:0,eh=h=>{let U=le.current;!U||!U.ready||(U.audio.currentTime=Math.max(0,ll(U,Math.max(0,h))))},yn=h=>{eh(h),clearInterval(V.current),B(null),K(!1),h=Math.max(-4,Math.min(h,x));let U=ot.current;b.forEach((k,j)=>{k.b<h?(U.played.add(j),U.hit.add(j),U.miss.delete(j)):(U.played.delete(j),U.hit.delete(j),U.miss.delete(j))}),U.streak=0,U.streakStart=null,q.current=h,g(h)},[mi,nh]=(0,E.useState)(!1),[vn,bi]=(0,E.useState)(null),Uo=(0,E.useRef)(!1);(0,E.useEffect)(()=>{Uo.current&&(Uo.current=!1,yn(q.current))},[v]);let rd=h=>d.notes.findIndex(U=>Math.abs(U.b-h.b)<.01&&(U.midi!=null?U.midi===h.midi:U.s===h.s&&U.f===h.f)),cl=(0,E.useRef)([]),[pi,sd]=(0,E.useState)(0),cd=h=>{cl.current.push(d.notes),cl.current.length>40&&cl.current.shift(),sd(cl.current.length),Uo.current=!0,p({...d,notes:h}),d.imported&&i&&i(d.id,{notes:h})},ah=()=>{let h=cl.current.pop();h&&(sd(cl.current.length),Uo.current=!0,p({...d,notes:h}),d.imported&&i&&i(d.id,{notes:h}),bi(null))},Bo=h=>{if(!vn)return;let U=rd(vn);if(U<0)return;let k=d.notes.map((j,O)=>O===U?{...j,b:Math.max(0,Math.round((j.b+h)*1e4)/1e4)}:j);bi({...vn,b:k[U].b}),cd(k)},lh=()=>{if(!vn)return;let h=rd(vn);h<0||(cd(d.notes.filter((U,k)=>k!==h)),bi(null))},ukTrackRef=(0,E.useRef)(null),[ukTrackW,ukSetTrackW]=(0,E.useState)(360),[ukIsMobile,ukSetIsMobile]=(0,E.useState)(()=>{try{return Math.min(window.innerWidth,window.innerHeight)<520}catch{return!1}}),ukMobileEff=(0,E.useEffect)(()=>{let onR=()=>ukSetIsMobile(Math.min(window.innerWidth,window.innerHeight)<520);window.addEventListener("resize",onR),window.addEventListener("orientationchange",onR);return()=>{window.removeEventListener("resize",onR),window.removeEventListener("orientationchange",onR)}},[]),ukTrackTap=()=>{u(z=>!z)},ukTrackEff=(0,E.useEffect)(()=>{let el=ukTrackRef.current;if(!el)return;let ro=new ResizeObserver(en=>{for(let e2 of en)ukSetTrackW(Math.max(200,Math.round(e2.contentRect.width)))});return ro.observe(el),()=>ro.disconnect()},[]),Ba=Math.round(ukTrackW/2),[ukZoom,ukSetZoom]=(0,E.useState)(()=>{try{return parseFloat(localStorage.getItem("uke:zoom"))||1.4}catch{return 1}}),[ukFluid,ukSetFluid]=(0,E.useState)(()=>{try{return localStorage.getItem("uke:fluid")!=="0"}catch{return!0}}),[ukLead,ukSetLead]=(0,E.useState)(()=>{try{return parseFloat(localStorage.getItem("uke:lead"))||2.6}catch{return 2.6}}),ukAheadPx=Math.max(140,ukTrackW-Math.round(ukTrackW/2)),ukBPS0=(ukAvgV.current>0)?ukAvgV.current:Math.max(.5,(d.bpm||90)/60),$n=ukFluid?Math.max(95,Math.min(1400,ukAheadPx/(Math.max(.8,ukLead)*ukBPS0))):Math.max(150,100*ukZoom),Gs=76,ukTB=(()=>{try{let z0=le.current;return(z0&&z0.ready&&z0.anchors&&z0.anchors.length>1)?z0:null}catch{return null}})(),ukPXS=$n*((ukAvgV.current>0)?ukAvgV.current:Math.max(.5,(d.bpm||90)/60)),ukT0=ukTB?ll(ukTB,f):0,ukXb=z0=>ukTB?Ba+(ll(ukTB,z0)-ukT0)*ukPXS:Ba+(z0-f)*$n,ukWb=(z0,z1)=>ukTB?Math.max(ukFluid?22:10,(ll(ukTB,z1)-ll(ukTB,z0))*ukPXS):Math.max(ukFluid?12:0,(z1-z0)*$n),ud=z(Math.max(f,0)),hi=[...S].reverse().find(h=>h.b<=Math.max(f,0))||S[0],sv=S.find(h=>h.b>f),Na=S.find(h=>h.b>f&&h.name!==hi?.name),fd=f<0&&c?Math.ceil(-f):null,cv=Math.min(100,Math.max(0,f/x*100)),ie=d.meter||4,uv=(f%ie+ie)%ie,fv=m&&m.pat||d.strum&&d.strum[n]||Mp[n],_s=b.filter(h=>h.b>=0&&!h.bg&&!h.voice).length,gi=_s?Math.round(X/_s*100):0,mn=(0,E.useMemo)(()=>b.filter(h=>h.type==="note"&&!h.bg&&!h.voice),[b]),nxB=(0,E.useMemo)(()=>{let mp=new Map(),by={};b.filter(h=>h.type==="note").forEach(h=>{(by[h.s]=by[h.s]||[]).push(h)});Object.keys(by).forEach(k2=>{let ar=by[k2].slice().sort((x2,y2)=>x2.b-y2.b);ar.forEach((h,i2)=>{if(i2+1<ar.length)mp.set(h,ar[i2+1].b)})});return mp},[b]),ih=(0,E.useMemo)(()=>(0,r.jsx)("svg",{width:"100%",height:"26",viewBox:`0 0 ${Math.max(x,1)} 26`,preserveAspectRatio:"none",style:{position:"absolute",inset:0},children:[Array.from({length:Math.max(1,Math.ceil(x/4))},function(_u,mi){return (0,r.jsx)("rect",{x:mi*4,y:0,width:0.25,height:26,fill:mi%1===0?"rgba(242,179,76,0.55)":"rgba(255,255,255,0.15)"},"ml"+mi);}),mn.map((h,U)=>(0,r.jsx)("rect",{x:h.b,y:4+h.s*4.6,width:Math.max(h.d,.6),height:3.2,rx:1,fill:"#5f6b8a"},U))]}),[mn,x]),ukChordGroups=(0,E.useMemo)(()=>{let groups=[],used=new Set();mn.forEach((n,i)=>{if(used.has(i))return;let grp=[n];used.add(i);mn.forEach((m,j)=>{if(j!==i&&!used.has(j)&&Math.abs(m.b-n.b)<.005)grp.push(m),used.add(j)});if(grp.length===4&&new Set(grp.map(gn=>gn.s)).size===4){let name=null;for(let nm in He){let shape=He[nm];if(grp.every(gn=>shape[3-gn.s]===gn.f)){name=nm;break}}if(name)groups.push({b:n.b,name:name,strings:grp.map(gn=>gn.s)})}});return groups},[mn]),oh=(0,E.useMemo)(()=>{if(e!=="memoire")return new Set;let h=new Set,U=Math.min(.5,.12+(o||0)*.045),k=0;for(;k<mn.length;)if(Math.random()<U){let j=2+Math.floor(Math.random()*3);for(let O=0;O<j&&k+O<mn.length;O++)h.add(mn[k+O]);k+=j+3+Math.floor(Math.random()*3)}else k++;return h},[mn,e,o]);(0,E.useEffect)(()=>{Q&&e==="memoire"&&gi>=70&&s&&s()},[Q]);let yi=null;if(mn.length&&(ud==="picking"||e==="picking")){let h=O=>12+O*Gs+Gs/2,U=0;for(;U<mn.length&&mn[U].b<=f;)U++;let k=mn[U-1],j=mn[U];if(!k&&j)yi={y:h(j.s)};else if(k&&!j)yi={y:h(k.s)};else if(k&&j){let O=k.b,at=j.b;at-O>2&&(O=at-1.5);let et=Math.min(1,Math.max(0,(f-O)/(at-O||1)));yi={y:h(k.s)+(h(j.s)-h(k.s))*et-184*et*(1-et)}}}let[learnOpen,setLearnOpen]=(0,E.useState)(!1),[learnStyle,setLearnStyle]=(0,E.useState)("folk"),[learnKind,setLearnKind]=(0,E.useState)("Picking"),[learnMsg,setLearnMsg]=(0,E.useState)(""),[learnBusy,setLearnBusy]=(0,E.useState)(!1);let rh=d.notes.filter(h=>h.ly),In=[];rh.forEach(h=>{(h.nl||!In.length)&&In.push([]),In[In.length-1].push(h)});let[ukBest,setUkBest]=(0,E.useState)(null);(0,E.useEffect)(()=>{if(!Q)return;let hh=Math.min(1,D),uu=gi/100*(.5+.5*hh),ss=uu>=.85?5:uu>=.68?4:uu>=.5?3:uu>=.3?2:uu>0?1:0,pp=Math.round(R*hh);ukSaveScore(d.id,{pts:pp,stars:ss,acc:gi,title:d.title}).then(rr=>{rr&&setUkBest(rr)});},[Q]);let Ga=In.findIndex(h=>h[h.length-1].b+h[h.length-1].d>f);return Ga===-1&&(Ga=In.length-1),(0,r.jsxs)("div",{style:{display:"flex",flexDirection:"column",minHeight:"100vh",userSelect:"none"},onPointerDown:ukIsMobile?ukTrackTap:Ip,children:[
 (0,r.jsxs)("div",{style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"6px 14px",background:"var(--c1)",borderBottom:"1px solid var(--line)",fontSize:13},children:[
   (0,r.jsx)("span",{style:{color:"var(--tmut)",fontWeight:700},children:"\ud83c\udfaf S'entra\u00eener sur les mesures :"}),
@@ -19265,5 +19291,5 @@ function boot(){
 if(typeof document!=='undefined')boot();
 if(typeof module!=='undefined'&&module.exports)module.exports={STYLES,PROFILES,LEVELS,generate,buildPdf,pdfLines,paginate,renderSystems,composeMelody,buildLevelBar,applyGimmick,placeMelody,getBestPositionForNote,getBestUkulelePosition,generateSunoStylePattern,generateRiffPattern,generateFullTrack,buildDynamicTrack,injectRiffs,parseAsciiToJSON,asciiEventsToData,UKE_DATABASE,applyStylePicking,chordToneFret,patternForStyle,OPEN,PC_OF,expandScale,pieceTimes,parseMidi,parseMusicXML,detectChord,importToPiece,mapKind,GROOVE,grooveAcc,DRUMS,hatGain,VIB,VARIANTS,SCALES,rollIdentity,ensureExtraLevels,deepCopyGrids,fillChantSilences,sanitizeStackedConsonance,sanitizeBaseConsonance,addRealArpeggio,ARCH_STYLES};
 </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a345361a4a410b18',t:'MTc4ODI3NTUyNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a3458e2b1cb39eba',t:'MTc4ODI3OTEzMw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a345361a4a410b18',t:'MTc4ODI3NTUyNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a345c4e22dd9ebaa',t:'MTc4ODI4MTM3NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
